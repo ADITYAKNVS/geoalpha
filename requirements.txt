@@ -1,0 +1,14 @@
+python-dotenv
+streamlit
+yfinance
+fyers-apiv3
+pandas
+requests
+groq
+pytz
+google-genai
+transformers
+torch
+numpy
+plotly
+yfinance
