@@ -29,6 +29,11 @@ from technical_guardrails import (
     fetch_historical_data,
     map_yf_to_fyers,
     get_live_quotes,
+    get_fyers_client,
+    get_fyers_debug_status,
+    check_token_expiry,
+    generate_fyers_auth_url,
+    exchange_fyers_auth_code,
 )
 from signal_combiner import HybridSignalCombiner
 
@@ -252,6 +257,68 @@ selected_stock = next(
 
 st.sidebar.divider()
 generate = st.sidebar.button("🔍 Generate Report", width="stretch")
+
+# ── Fyers Token Management ──
+st.sidebar.divider()
+token_info = check_token_expiry()
+if token_info["status"] == "valid":
+    _token_icon = "🟢"
+    _token_color = "#00e676"
+elif token_info["status"] == "expiring_soon":
+    _token_icon = "🟡"
+    _token_color = "#ffab00"
+else:
+    _token_icon = "🔴"
+    _token_color = "#ff1744"
+
+st.sidebar.markdown(f"""
+<div style="background:rgba(255,255,255,0.03);border-radius:10px;padding:12px;border-left:3px solid {_token_color};">
+    <div style="font-size:13px;font-weight:700;color:#e8e8f0;">🔑 Fyers Token</div>
+    <div style="font-size:12px;color:{_token_color};margin-top:4px;">{_token_icon} {token_info['message']}</div>
+</div>
+""", unsafe_allow_html=True)
+
+if token_info["status"] in ("expired", "expiring_soon", "missing"):
+    st.sidebar.warning("⚠️ Refresh your Fyers token to get live Indian market data.")
+
+with st.sidebar.expander("🔄 Refresh Token", expanded=token_info["status"] in ("expired", "missing")):
+    # Security gate — prevent exposing client ID in auth URL to random users
+    if "fyers_admin_unlocked" not in st.session_state:
+        st.session_state.fyers_admin_unlocked = False
+
+    if not st.session_state.fyers_admin_unlocked:
+        st.caption("🔒 Enter admin PIN to access token refresh")
+        admin_pin = st.text_input("Admin PIN", type="password", key="fyers_admin_pin", label_visibility="collapsed", placeholder="Enter PIN...")
+        # PIN = last 4 chars of FYERS_CLIENT_ID (e.g. "-100" from "DRPRLG8GTH-100")
+        expected_pin = FYERS_CLIENT_ID[-4:] if len(FYERS_CLIENT_ID) >= 4 else FYERS_CLIENT_ID
+        if st.button("🔓 Unlock", use_container_width=True):
+            if admin_pin == expected_pin:
+                st.session_state.fyers_admin_unlocked = True
+                st.rerun()
+            else:
+                st.error("Incorrect PIN")
+    else:
+        st.caption("**Step 1:** Click the link below to log in to Fyers")
+        try:
+            auth_url = generate_fyers_auth_url()
+            st.markdown(f"[🔗 Open Fyers Login]({auth_url})")
+        except Exception as exc:
+            st.error(f"Could not generate auth URL: {exc}")
+            auth_url = None
+
+        st.caption("**Step 2:** After login, copy the `auth_code` from the redirect URL")
+        auth_code_input = st.text_input("Paste auth_code here", key="fyers_auth_code", label_visibility="collapsed", placeholder="Paste auth_code here...")
+
+        if st.button("✅ Exchange Token", disabled=not auth_code_input, use_container_width=True):
+            with st.spinner("Exchanging token..."):
+                result = exchange_fyers_auth_code(auth_code_input.strip())
+            if result["success"]:
+                st.success(result["message"])
+                st.session_state.fyers_admin_unlocked = False
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(result["message"])
 
 
 def log_fetch_warning(context, exc):
@@ -749,7 +816,7 @@ def get_nifty_50_change():
             "range_to": range_to,
             "cont_flag": "1"
         }
-        response = fyers.history(data=data)
+        response = get_fyers_client().history(data=data)
         if response and response.get("s") == "ok" and "candles" in response and len(response["candles"]) >= 2:
             candles = response["candles"]
             last_close = candles[-1][4]
@@ -758,6 +825,15 @@ def get_nifty_50_change():
     except Exception as exc:
         log_fetch_warning("Nifty 50 change", exc)
     return 0.0
+
+
+def render_fyers_debug_message():
+    status = get_fyers_debug_status()
+    return (
+        f"Fyers source: `{status['source']}` | "
+        f"client id: `{status['client_id_masked']}` | "
+        f"access token: `{status['access_token_masked']}`"
+    )
 
 
 def build_stock_search_queries(ticker, stock_name, sector):
@@ -1079,13 +1155,27 @@ def get_commodity_prices():
         except Exception as exc:
             log_fetch_warning(f"Price fetch [{ticker}]", exc)
             return "N/A"
+
+    def safe_yf_price(ticker):
+        """Fallback to yfinance for tickers not available on Fyers."""
+        try:
+            import yfinance as yf
+            hist = yf.Ticker(ticker).history(period="5d")
+            return round(hist['Close'].iloc[-1], 2) if len(hist) >= 1 else "N/A"
+        except Exception as exc:
+            log_fetch_warning(f"YF price fetch [{ticker}]", exc)
+            return "N/A"
+
     return {
+        # Fyers-available tickers
         "oil": safe_price("CL=F"), "gold": safe_price("GC=F"),
         "usd_inr": safe_price("INR=X"), "copper": safe_price("HG=F"),
-        "aluminium": safe_price("ALI=F"), "steel": safe_price("HRC=F"),
-        "bond_10y": safe_price("^TNX"), "india_gsec": safe_price("^INBMK10Y"),
-        "iron_ore": safe_price("TIO=F"), "china_etf": safe_price("FXI"),
-        "pmi_proxy": safe_price("XLI"),
+        "aluminium": safe_price("ALI=F"),
+        # yfinance fallback — no Fyers equivalent
+        "steel": safe_yf_price("HRC=F"),
+        "bond_10y": safe_yf_price("^TNX"), "india_gsec": safe_yf_price("^INBMK10Y"),
+        "iron_ore": safe_yf_price("TIO=F"), "china_etf": safe_yf_price("FXI"),
+        "pmi_proxy": safe_yf_price("XLI"),
     }
 
 @st.cache_data(ttl=900)
@@ -1095,10 +1185,11 @@ def get_nifty_sector_data():
         "Oil & Gas": "^CNXENERGY", "Pharma": "^CNXPHARMA",
         "Metals": "^CNXMETAL", "Infrastructure": "^CNXINFRA", "Gold": "GOLDBEES.NS"
     }
+    import yfinance as yf
     performance = {}
     for name, ticker in sectors.items():
         try:
-            hist = fetch_historical_data(ticker, period="5d")
+            hist = yf.Ticker(ticker).history(period="2d")
             if len(hist) >= 2:
                 change = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100, 2)
                 arrow = "📈" if change > 0 else "📉"
@@ -1106,8 +1197,18 @@ def get_nifty_sector_data():
             else:
                 performance[name] = "N/A"
         except Exception as exc:
-            log_fetch_warning(f"Nifty sector data [{name}]", exc)
-            performance[name] = "N/A"
+            # Fallback to Fyers history
+            try:
+                hist = fetch_historical_data(ticker, period="5d")
+                if len(hist) >= 2:
+                    change = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100, 2)
+                    arrow = "📈" if change > 0 else "📉"
+                    performance[name] = f"{arrow} {'+' if change > 0 else ''}{change}%"
+                else:
+                    performance[name] = "N/A"
+            except Exception:
+                log_fetch_warning(f"Nifty sector data [{name}]", exc)
+                performance[name] = "N/A"
     return performance
 
 @st.cache_data(ttl=900)
@@ -1117,17 +1218,26 @@ def get_nifty_sector_changes():
         "Oil & Gas": "^CNXENERGY", "Pharma": "^CNXPHARMA",
         "Metals": "^CNXMETAL", "Infrastructure": "^CNXINFRA", "Gold": "GOLDBEES.NS"
     }
+    import yfinance as yf
     changes = {}
     for name, ticker in sectors.items():
         try:
-            hist = fetch_historical_data(ticker, period="5d")
+            hist = yf.Ticker(ticker).history(period="2d")
             if len(hist) >= 2:
                 changes[name] = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100, 2)
             else:
                 changes[name] = 0.0
         except Exception as exc:
-            log_fetch_warning(f"Nifty sector change [{name}]", exc)
-            changes[name] = 0.0
+            # Fallback to Fyers history
+            try:
+                hist = fetch_historical_data(ticker, period="5d")
+                if len(hist) >= 2:
+                    changes[name] = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100, 2)
+                else:
+                    changes[name] = 0.0
+            except Exception:
+                log_fetch_warning(f"Nifty sector change [{name}]", exc)
+                changes[name] = 0.0
     return changes
 
 @st.cache_data(ttl=900)
@@ -1459,9 +1569,14 @@ RULES:
 6. MACRO RELEVANCE: Each sector has CRITICAL and IRRELEVANT macro factors listed.
    - NEVER mention IRRELEVANT factors (e.g., do NOT mention Nasdaq for Oil & Gas).
    - ALWAYS reference CRITICAL factors with exact values.
-7. SUBSECTOR DIVERGENCE: When flagged, you MUST explain the split.
-   - For Oil & Gas: Upstream (ONGC) benefits from high crude, Downstream (BPCL/HPCL) suffers.
-   - For Metals: Ferrous (Tata Steel) driven by China demand, Non-Ferrous (Hindalco) by LME prices.
+7. SUBSECTOR DIVERGENCE (CRITICAL RULE): When explaining a sector, you MUST account for its subsectors if they diverge.
+   - For Oil & Gas: This behaves as TWO SEPARATE SECTORS when crude spikes. NEVER say the "whole sector is bullish" just because the index is up.
+     * Upstream (ONGC, Oil India) benefits from HIGH crude.
+     * Downstream/Refining (BPCL, HPCL, IOC) suffers from HIGH crude (margin compression).
+     * If the index is up but refiners are down, explicitly state that Upstream dragged the index higher while Downstream suffered.
+   - For Metals: Ferrous (Tata Steel) driven by China demand, Non-Ferrous (Hindalco) by LME prices. 
+     * CRITICAL: Gold is a SAFE HAVEN asset. DO NOT use gold price movements or gold-related news (like Iran conflicts) to explain industrial metals (steel/copper/aluminium) performance.
+   - For Infrastructure: Heavyweights like L&T dominate the index. If the sector is down but others are up, explicitly check if L&T dragged the sector down.
 8. STOCK PICKS: Use the pre-computed momentum-verified picks EXACTLY as provided.
    - NEVER override stock picks. If the system says a stock is a top pick, explain WHY using the provided reason.
    - NEVER add a stock to the avoid list unless the system explicitly flagged it as avoid.
@@ -1487,13 +1602,16 @@ RULES:
     - Use Key Risk / Contradiction to explain when price is ignoring news.
 13. EVIDENCE STATE: If evidence state is INSUFFICIENT_EVIDENCE, say the move may be flow-driven and avoid overclaiming.
 14. CAUSALITY: Do not say a headline "caused" the move unless the data explicitly proves it. Use phrasing like "likely driver", "coincided with", or "plausible catalyst".
-15. VOLUME CLAIMS: A 1.2x-2.0x volume reading is only elevated activity or selling/buying pressure. Do not call it institutional buying/selling unless stronger evidence is explicitly supplied.
-16. DISTRIBUTION / ACCUMULATION: Treat these as hypotheses only when multi-day price-volume weakness/strength is present. Otherwise say "possible pressure" or "price-news divergence".
+15. VOLUME CLAIMS & MOVE CLASSIFICATION: 
+    - Volume 1.2x-2.0x indicates elevated activity/positioning, NOT necessarily an established trend.
+    - If sector move is small (e.g., -0.5% to +0.5%) but volume is HIGH (>1.2x), this is NOT a quiet/flat "TECHNICAL_ONLY" day. It is FLOW_DRIVEN (institutional distribution/accumulation or sector rebalancing).
+    - If sector move is small and volume is LOW (<1.0x), classify as "POSITIONING / LOW CONVICTION". Do not call it "SECTOR_DRIVEN".
+16. DISTRIBUTION / ACCUMULATION / REBALANCING: Use these terms when volume contradicts the price magnitude. High volume on a flat day suggests a battle between buyers and sellers or index rebalancing.
 17. TIME HORIZON: Respect the supplied article horizons. Immediate macro risk can outweigh medium-term positive news without being a true contradiction.
-18. NO CLEAR CATALYST RULE: If the daily price move is strictly within -1.5% to +1.5% AND volume is BELOW_AVERAGE (<1.0x), classify the Move Type as "POSITIONING / LOW-CONVICTION MOVE" and explicitly state "No clear catalyst detected."
-    - Explain that the sector is experiencing minor profit taking, index flows, or rotation rather than structural changes or geopolitical shocks.
+18. NO CLEAR CATALYST RULE: If the daily price move is strictly within -1.0% to +1.0% AND volume is BELOW_AVERAGE (<1.0x), explicitly classify the Move Type as "POSITIONING / LOW-CONVICTION MOVE" and explicitly state "No clear catalyst detected."
+    - Explain that the sector is experiencing internal subsector rotation, minor profit-taking, index flows, or exhaustion.
     - NEVER force a geopolitical or breaking news narrative on a low volume, low conviction day.
-19. DEFENSIVE ROTATION (PHARMA/FMCG/IT): If historically defensive sectors (like Pharma, FMCG, IT) show small positive performance (+0.1% to +1.0%) on a day when high-beta sectors (like Banking or Metals) are falling or flat, explicitly classify the move as "Defensive Rotation" or "Selective Accumulation."
+19. DEFENSIVE ROTATION (PHARMA/FMCG/IT): If historically defensive sectors (like Pharma, FMCG, IT) show positive performance on a day when high-beta sectors (like Banking or Metals) are falling, explicitly classify the move as "Defensive Rotation" or "Selective Accumulation."
      - DO NOT force background news (like minor clinical trials, generic approvals, or international drug developments) to be the primary catalyst.
      - The PRIMARY explanation MUST be: "The sector's resilience likely reflects defensive capital rotation rather than a single news catalyst."
      - Any news should be introduced ONLY as: "News provides a supportive sector backdrop" — never as "News drove the move."
@@ -1524,11 +1642,17 @@ RULES:
 
 End with: \u26a0\ufe0f This is not financial advice. For educational purposes only."""
 
+    # Determine currency based on magnitude (MCX is ~8000+, YF is ~90)
+    try:
+        _cur = "₹" if float(prices.get('oil', 0)) > 1000 else "$"
+    except:
+        _cur = "$"
+        
     user_prompt = f"""
-LIVE DATA:
-- Crude Oil: ${prices['oil']}/barrel | Gold: ${prices['gold']}/oz | USD/INR: {prices['usd_inr']}
+LIVE DATA (READ CURRENCY CAREFULLY):
+- Crude Oil: {_cur}{prices['oil']}/barrel | Gold: {_cur}{prices['gold']} | USD/INR: ₹{prices['usd_inr']}
 - US 10Y Yield: {prices.get('bond_10y', 'N/A')}% | India G-Sec: {prices.get('india_gsec', 'N/A')}%
-- Copper: ${prices.get('copper', 'N/A')}/lb | Steel: ${prices.get('steel', 'N/A')}
+- Copper: {_cur}{prices.get('copper', 'N/A')} | Steel: {_cur}{prices.get('steel', 'N/A')}
 - Nasdaq: {nasdaq_text}
 
 SECTOR PERFORMANCE TODAY:
@@ -1870,6 +1994,59 @@ def get_delta(hist):
     return 0, 0, 0
 
 # ── DASHBOARD FRAGMENT: Auto-refreshing Snapshot ──
+def is_indian_market_hours():
+    """Check if current IST time is within Indian market hours (8 AM - 3:30 PM, weekdays)."""
+    ist = pytz.timezone('Asia/Kolkata')
+    now_ist = datetime.now(timezone.utc).astimezone(ist)
+    if now_ist.weekday() >= 5:  # Sat/Sun
+        return False
+    market_open = now_ist.replace(hour=8, minute=0, second=0, microsecond=0)
+    market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now_ist <= market_close
+
+
+def get_yf_quotes(tickers):
+    """Fallback: fetch last-close data from yfinance for the market snapshot."""
+    import yfinance as yf
+    results = {}
+    for t in tickers:
+        try:
+            hist = yf.Ticker(t).history(period="2d")
+            if len(hist) >= 2:
+                lp = round(hist['Close'].iloc[-1], 2)
+                ch = round(hist['Close'].iloc[-1] - hist['Close'].iloc[-2], 2)
+                chp = round(((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100, 2)
+                results[t] = {"lp": lp, "ch": ch, "chp": chp}
+            elif len(hist) >= 1:
+                results[t] = {"lp": round(hist['Close'].iloc[-1], 2), "ch": 0, "chp": 0}
+            else:
+                results[t] = {"lp": 0, "ch": 0, "chp": 0}
+        except Exception:
+            results[t] = {"lp": 0, "ch": 0, "chp": 0}
+    return results
+
+
+def get_smart_quotes(tickers):
+    """Auto-switch between Fyers (market hours) and yfinance (after hours)."""
+    market_open = is_indian_market_hours()
+    source = "fyers"
+
+    if market_open:
+        try:
+            live_q = get_live_quotes(tickers)
+            live_count = sum(1 for q in live_q.values() if q.get("lp", 0))
+            if live_count > 0:
+                return live_q, "fyers"
+            # Fyers returned all zeros — fall back
+            source = "yfinance"
+        except Exception:
+            source = "yfinance"
+    else:
+        source = "yfinance"
+
+    return get_yf_quotes(tickers), source
+
+
 @st.fragment(run_every="10s")
 def dashboard_snapshot(nifty_data):
     now_refresh = datetime.now(timezone.utc).astimezone(pytz.timezone('Asia/Kolkata')).strftime("%Y-%m-%d %H:%M:%S")
@@ -1881,20 +2058,35 @@ def dashboard_snapshot(nifty_data):
             st.cache_data.clear()
             st.rerun()
 
-    # Fetch all live quotes optimally in 1 call
     fyers_tickers = ["^NSEI", "^BSESN", "^NSEBANK", "^CNXIT", "GC=F", "CL=F", "INR=X", "SI=F"]
-    live_q = get_live_quotes(fyers_tickers)
+    live_q, data_source = get_smart_quotes(fyers_tickers)
+
+    live_quote_count = sum(1 for quote in live_q.values() if quote.get("lp", 0))
+    valid_sector_points = sum(1 for value in nifty_data.values() if value != "N/A")
+
+    if live_quote_count == 0:
+        st.warning(
+            "Market data unavailable. If during market hours, check your Fyers token. "
+            "After hours, yfinance may not have data for MCX futures."
+        )
+        st.caption(render_fyers_debug_message())
+
+    if data_source == "yfinance" and live_quote_count > 0:
+        st.info("📊 After hours — showing **last close** data via yfinance. Live Fyers polling resumes at 8 AM IST.")
 
     def q_val(t):
         q = live_q.get(t, {"lp": 0, "ch": 0, "chp": 0})
         return q["lp"], q["ch"], q["chp"]
+
+    # Data source label
+    source_label = "Live Polling" if data_source == "fyers" else "Last Close"
 
     # Market Snapshot
     st.markdown("""<div class="glass-card" style="padding:24px;">
         <h3 style="color:#e8e8f0;margin-top:0;">📡 Live Market Snapshot</h3>
     """, unsafe_allow_html=True)
 
-    st.markdown("##### 🇮🇳 Indian Indices (Live Polling)")
+    st.markdown(f"##### 🇮🇳 Indian Indices ({source_label})")
     c1, c2, c3, c4 = st.columns(4)
     n_v, n_p, n_pc = q_val("^NSEI")
     s_v, s_p, s_pc = q_val("^BSESN")
@@ -1925,16 +2117,19 @@ def dashboard_snapshot(nifty_data):
     with c3: st.markdown(render_metric_card("DOW JONES", f"{dw_v:,.2f}" if dw_v else "N/A", dw_p, dw_pc), unsafe_allow_html=True)
     with c4: st.markdown(render_metric_card("FTSE 100", f"{ft_v:,.2f}" if ft_v else "N/A", ft_p, ft_pc), unsafe_allow_html=True)
 
-    st.markdown("##### 🛢️ Commodities & Forex (Live Futures)")
+    st.markdown(f"##### 🛢️ Commodities & Forex ({source_label})")
     c1, c2, c3, c4 = st.columns(4)
     g_v, g_p, g_pc = q_val("GC=F")
     o_v, o_p, o_pc = q_val("CL=F")
     r_v, r_p, r_pc = q_val("INR=X")
     sv_v, sv_p, sv_pc = q_val("SI=F")
-    with c1: st.markdown(render_metric_card("🥇 GOLD (₹)", f"₹{g_v:,.0f}" if g_v else "N/A", g_p, g_pc), unsafe_allow_html=True)
-    with c2: st.markdown(render_metric_card("🛢️ CRUDE (₹)", f"₹{o_v:,.0f}" if o_v else "N/A", o_p, o_pc), unsafe_allow_html=True)
+    # Currency symbol: Fyers returns MCX prices in ₹, yfinance returns international prices in $
+    _cur = "₹" if data_source == "fyers" else "$"
+    _cur_label = "(₹)" if data_source == "fyers" else "($)"
+    with c1: st.markdown(render_metric_card(f"🥇 GOLD {_cur_label}", f"{_cur}{g_v:,.0f}" if g_v else "N/A", g_p, g_pc), unsafe_allow_html=True)
+    with c2: st.markdown(render_metric_card(f"🛢️ CRUDE {_cur_label}", f"{_cur}{o_v:,.0f}" if o_v else "N/A", o_p, o_pc), unsafe_allow_html=True)
     with c3: st.markdown(render_metric_card("💱 USD/INR", f"₹{r_v:,.4f}" if r_v else "N/A", r_p, r_pc), unsafe_allow_html=True)
-    with c4: st.markdown(render_metric_card("🥈 SILVER (₹)", f"₹{sv_v:,.0f}" if sv_v else "N/A", sv_p, sv_pc), unsafe_allow_html=True)
+    with c4: st.markdown(render_metric_card(f"🥈 SILVER {_cur_label}", f"{_cur}{sv_v:,.0f}" if sv_v else "N/A", sv_p, sv_pc), unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.divider()
@@ -2136,4 +2331,3 @@ else:
     </div>""", unsafe_allow_html=True)
 
 # Force Streamlit reload to clear cached imported modules
-

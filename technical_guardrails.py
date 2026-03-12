@@ -6,9 +6,11 @@ strict boundaries that the ML model cannot override.
 """
 
 import os
+import logging
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    from pathlib import Path
+    load_dotenv(Path(__file__).with_name(".env"))
 except ImportError:
     pass
 
@@ -16,10 +18,153 @@ import pandas as pd
 from datetime import datetime, timedelta
 from fyers_apiv3 import fyersModel
 import numpy as np
+try:
+    import streamlit as st
+except ImportError:
+    st = None
 
-FYERS_CLIENT_ID = os.environ.get("FYERS_CLIENT_ID", "")
-FYERS_ACCESS_TOKEN = os.environ.get("FYERS_ACCESS_TOKEN", "")
+logger = logging.getLogger(__name__)
+
+
+def _get_runtime_secret(key: str) -> str:
+    value = os.environ.get(key, "")
+    if value:
+        return value
+    if st is not None:
+        try:
+            secret_value = st.secrets.get(key, "")
+            if secret_value:
+                return str(secret_value)
+        except Exception:
+            pass
+    return ""
+
+
+def _mask_secret(value: str, keep: int = 4) -> str:
+    if not value:
+        return "missing"
+    if len(value) <= keep * 2:
+        return "*" * len(value)
+    return f"{value[:keep]}...{value[-keep:]}"
+
+
+def get_fyers_credentials() -> tuple[str, str]:
+    return _get_runtime_secret("FYERS_CLIENT_ID"), _get_runtime_secret("FYERS_ACCESS_TOKEN")
+
+
+FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN = get_fyers_credentials()
 fyers = fyersModel.FyersModel(client_id=FYERS_CLIENT_ID, is_async=False, token=FYERS_ACCESS_TOKEN, log_path="")
+
+
+def get_fyers_client():
+    client_id, access_token = get_fyers_credentials()
+    if not client_id or not access_token:
+        raise RuntimeError("FYERS credentials are missing")
+    return fyersModel.FyersModel(client_id=client_id, is_async=False, token=access_token, log_path="")
+
+
+def get_fyers_debug_status() -> dict:
+    client_id, access_token = get_fyers_credentials()
+    source = "environment"
+    if not os.environ.get("FYERS_CLIENT_ID") and st is not None:
+        try:
+            if st.secrets.get("FYERS_CLIENT_ID", ""):
+                source = "streamlit_secrets"
+        except Exception:
+            pass
+    return {
+        "client_id_present": bool(client_id),
+        "access_token_present": bool(access_token),
+        "client_id_masked": _mask_secret(client_id),
+        "access_token_masked": _mask_secret(access_token),
+        "source": source if client_id or access_token else "missing",
+    }
+
+
+def check_token_expiry() -> dict:
+    """Decode the Fyers JWT access token and return expiry status."""
+    _, access_token = get_fyers_credentials()
+    if not access_token:
+        return {"status": "missing", "message": "No access token configured", "hours_remaining": 0}
+    try:
+        import base64, json as _json
+        payload = access_token.split(".")[1]
+        payload += "=" * (4 - len(payload) % 4)
+        data = _json.loads(base64.urlsafe_b64decode(payload))
+        exp_ts = data.get("exp", 0)
+        now_ts = datetime.now().timestamp()
+        hours_remaining = (exp_ts - now_ts) / 3600
+        if hours_remaining <= 0:
+            return {"status": "expired", "message": "Token has expired", "hours_remaining": 0}
+        elif hours_remaining <= 1:
+            return {"status": "expiring_soon", "message": f"Expires in {int(hours_remaining * 60)}min", "hours_remaining": round(hours_remaining, 1)}
+        else:
+            return {"status": "valid", "message": f"Valid for {hours_remaining:.1f}h", "hours_remaining": round(hours_remaining, 1)}
+    except Exception as exc:
+        logger.warning("Token expiry check failed: %s", exc)
+        return {"status": "unknown", "message": "Could not decode token", "hours_remaining": 0}
+
+
+def generate_fyers_auth_url() -> str:
+    """Generate the Fyers OAuth login URL."""
+    client_id, _ = get_fyers_credentials()
+    secret_key = _get_runtime_secret("FYERS_SECRET_KEY")
+    redirect_uri = _get_runtime_secret("FYERS_REDIRECT_URI") or "http://127.0.0.1"
+    session = fyersModel.SessionModel(
+        client_id=client_id,
+        secret_key=secret_key,
+        redirect_uri=redirect_uri,
+        response_type="code",
+        grant_type="authorization_code",
+    )
+    return session.generate_authcode()
+
+
+def exchange_fyers_auth_code(auth_code: str) -> dict:
+    """Exchange an auth code for an access token and save to .env."""
+    client_id, _ = get_fyers_credentials()
+    secret_key = _get_runtime_secret("FYERS_SECRET_KEY")
+    redirect_uri = _get_runtime_secret("FYERS_REDIRECT_URI") or "http://127.0.0.1"
+    session = fyersModel.SessionModel(
+        client_id=client_id,
+        secret_key=secret_key,
+        redirect_uri=redirect_uri,
+        response_type="code",
+        grant_type="authorization_code",
+    )
+    session.set_token(auth_code)
+    response = session.generate_token()
+    if "access_token" in response:
+        new_token = response["access_token"]
+        # Save to .env file
+        env_path = Path(__file__).with_name(".env")
+        _set_env_var(str(env_path), "FYERS_ACCESS_TOKEN", new_token)
+        # Also update the running environment
+        os.environ["FYERS_ACCESS_TOKEN"] = new_token
+        return {"success": True, "message": "Token refreshed!"}
+    else:
+        return {"success": False, "message": f"Fyers error: {response.get('message', 'Unknown error')}"}
+
+
+def _set_env_var(filepath: str, key: str, value: str):
+    """Write or update a key=value in a .env file."""
+    lines = []
+    found = False
+    try:
+        with open(filepath, "r") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        pass
+    with open(filepath, "w") as f:
+        for line in lines:
+            if line.startswith(f"{key}="):
+                f.write(f"{key}={value}\n")
+                found = True
+            else:
+                f.write(line)
+        if not found:
+            f.write(f"{key}={value}\n")
+
 
 def map_yf_to_fyers(ticker: str) -> str:
     index_map = {
@@ -31,23 +176,24 @@ def map_yf_to_fyers(ticker: str) -> str:
         "^CNXFMCG": "NSE:NIFTYFMCG-INDEX",
         "^CNXINFRA": "NSE:NIFTYINFRA-INDEX",
         "^NSEI": "NSE:NIFTY50-INDEX",
-        "^BSESN": "BSE:SENSEX-INDEX",  
+        "^BSESN": "BSE:SENSEX-INDEX",
     }
     if ticker in index_map:
         return index_map[ticker]
-        
-    if ticker in ["GC=F", "CL=F", "INR=X", "SI=F"]:
+
+    if ticker in ["GC=F", "CL=F", "INR=X", "SI=F", "HG=F", "ALI=F"]:
         now = datetime.now()
         yy = str(now.year)[-2:]
         m_idx = now.month - 1
         months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-        
+
         if now.day > 18:
             m_idx = (m_idx + 1) % 12
-            if m_idx == 0: yy = str(int(yy) + 1)
-            
+            if m_idx == 0:
+                yy = str(int(yy) + 1)
+
         cur_month = months[m_idx]
-        
+
         if ticker == "GC=F":
             return f"MCX:GOLDPETAL{yy}{cur_month}FUT"
         if ticker == "CL=F":
@@ -55,10 +201,14 @@ def map_yf_to_fyers(ticker: str) -> str:
         if ticker == "INR=X":
             return f"NSE:USDINR{yy}{cur_month}FUT"
         if ticker == "SI=F":
-            if m_idx % 2 == 0: 
+            if m_idx % 2 == 0:
                 m_idx = (m_idx + 1) % 12
                 cur_month = months[m_idx]
             return f"MCX:SILVERMIC{yy}{cur_month}FUT"
+        if ticker == "HG=F":
+            return f"MCX:COPPER{yy}{cur_month}FUT"
+        if ticker == "ALI=F":
+            return f"MCX:ALUMINIUM{yy}{cur_month}FUT"
 
     if ticker.endswith(".NS"):
         return f"NSE:{ticker.replace('.NS', '')}-EQ"
@@ -66,13 +216,19 @@ def map_yf_to_fyers(ticker: str) -> str:
         return f"BSE:{ticker.replace('.BO', '')}-EQ"
     return ticker
 
+
 def get_live_quotes(tickers: list) -> dict:
     """Fetch live quotes (LTP, CH, CHP) for multiple tickers in one lightweight Fyers API call."""
     req_map = {map_yf_to_fyers(t): t for t in tickers}
     data = {"symbols": ",".join(req_map.keys())}
-    response = fyers.quotes(data=data)
     results = {t: {"lp": 0, "ch": 0, "chp": 0} for t in tickers}
-    
+
+    try:
+        response = get_fyers_client().quotes(data=data)
+    except Exception as exc:
+        logger.warning("Fyers live quote fetch failed for %s: %s", data["symbols"], exc)
+        return results
+
     if response and response.get("s") == "ok":
         for item in response.get("d", []):
             f_sym = item.get("n")
@@ -82,9 +238,12 @@ def get_live_quotes(tickers: list) -> dict:
                 results[orig_ticker] = {
                     "lp": v.get("lp", 0),
                     "ch": v.get("ch", 0),
-                    "chp": v.get("chp", 0)
+                    "chp": v.get("chp", 0),
                 }
+    else:
+        logger.warning("Fyers live quote response not ok: %s", response)
     return results
+
 
 def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
     days = 60
@@ -93,26 +252,55 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
             days = int(period[:-1]) * 2
         except ValueError:
             pass
-            
+
     range_to = datetime.now().strftime("%Y-%m-%d")
     range_from = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     fyers_symbol = map_yf_to_fyers(ticker)
-    
+
     data = {
         "symbol": fyers_symbol,
         "resolution": "1D",
         "date_format": "1",
         "range_from": range_from,
         "range_to": range_to,
-        "cont_flag": "1"
+        "cont_flag": "1",
     }
-    response = fyers.history(data=data)
     df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    try:
+        response = get_fyers_client().history(data=data)
+    except Exception as exc:
+        logger.warning("Fyers historical fetch failed for %s (%s): %s", ticker, fyers_symbol, exc)
+        return df
     if response and response.get("s") == "ok" and "candles" in response and len(response["candles"]) > 0:
         cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
         df = pd.DataFrame(response["candles"], columns=cols)
         df["Datetime"] = pd.to_datetime(df["Datetime"], unit="s")
         df.set_index("Datetime", inplace=True)
+    else:
+        logger.warning("Fyers historical response not ok for %s (%s): %s", ticker, fyers_symbol, response)
+        
+    # STITCHING LOGIC: Fyers History usually lags by a day (only returns fully completed candles).
+    # To make TA real-time, we get today's live quote and append it if it's missing.
+    if not df.empty:
+        try:
+            live_q = get_live_quotes([ticker]).get(ticker, {})
+            lp = live_q.get("lp", 0)
+            if lp > 0:
+                # Check if we already have today's candle (e.g. after midnight exchange update)
+                today_date = pd.to_datetime(datetime.now().date())
+                last_dt = df.index[-1].normalize()
+                
+                if last_dt < today_date:
+                    # Create a synthetic candle for today using the live quote
+                    # For a simple technical tail, assuming Open/High/Low are roughly around LTP
+                    # In a full setup we'd fetch actual O/H/L, but close is what matters for RSI/MA
+                    new_row = pd.DataFrame({
+                        "Open": [lp], "High": [lp], "Low": [lp], "Close": [lp], "Volume": [0]
+                    }, index=[today_date])
+                    df = pd.concat([df, new_row])
+        except Exception as exc:
+            logger.warning("Failed to stitch live quote for %s: %s", ticker, exc)
+            
     return df
 
 
@@ -541,18 +729,18 @@ class TechnicalGuardrails:
             reasons = []
 
             # RSI contribution (weight: 0.30)
-            # v2.1: Expanded zones — 30-40 lean bearish, 60-70 lean bullish
-            if rsi > 70:
+            # v2.9: 60-70 is moderately bullish (strong momentum), >70 is overbought (bearish)
+            if rsi >= 70:
                 score -= 0.30
                 reasons.append(f"RSI {rsi} — overbought")
-            elif rsi > 60:
-                score -= 0.10
-                reasons.append(f"RSI {rsi} — elevated (approaching overbought)")
-            elif rsi < 30:
+            elif rsi >= 60:
+                score += 0.15
+                reasons.append(f"RSI {rsi} — moderately bullish (strong momentum)")
+            elif rsi <= 30:
                 score += 0.30
                 reasons.append(f"RSI {rsi} — oversold (reversal likely)")
-            elif rsi < 40:
-                score += 0.10
+            elif rsi <= 40:
+                score -= 0.10
                 reasons.append(f"RSI {rsi} — weak (near oversold)")
             else:
                 reasons.append(f"RSI {rsi} — neutral zone")
