@@ -290,13 +290,15 @@ with st.sidebar.expander("🔄 Refresh Token", expanded=token_info["status"] in 
         st.caption("🔒 Enter admin PIN to access token refresh")
         admin_pin = st.text_input("Admin PIN", type="password", key="fyers_admin_pin", label_visibility="collapsed", placeholder="Enter PIN...")
         # PIN = last 4 chars of FYERS_CLIENT_ID (e.g. "-100" from "DRPRLG8GTH-100")
-        expected_pin = FYERS_CLIENT_ID[-4:] if len(FYERS_CLIENT_ID) >= 4 else FYERS_CLIENT_ID
+        clean_client_id = FYERS_CLIENT_ID.strip()
+        expected_pin = clean_client_id[-4:] if len(clean_client_id) >= 4 else clean_client_id
         if st.button("🔓 Unlock", use_container_width=True):
-            if admin_pin == expected_pin:
+            if admin_pin.strip() == expected_pin:
                 st.session_state.fyers_admin_unlocked = True
                 st.rerun()
             else:
                 st.error("Incorrect PIN")
+                print(f"Failed login attempt: Entered '{admin_pin}', Expected '{expected_pin}'")
     else:
         st.caption("**Step 1:** Click the link below to log in to Fyers")
         try:
