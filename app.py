@@ -42,6 +42,7 @@ from sector_report_utils import (
     build_sector_stock_contribution_lines,
     build_sector_technical_snapshot,
     inject_sector_technical_sections,
+    classify_rsi_zone,
 )
 from technical_guardrails import (
     TechnicalGuardrails,
