@@ -1271,13 +1271,13 @@ def get_nifty_sector_data_afterhours():
 
 
 def get_nifty_sector_data():
-    """Auto-switch: Fyers live during market hours, yfinance last-close after hours."""
-    if is_indian_market_hours():
-        live = get_nifty_sector_data_live()
-        # If Fyers returned real data for at least half the sectors, use it
-        valid = sum(1 for v in live.values() if v != "N/A")
-        if valid >= 4:
-            return live
+    """Always try Fyers first (works even after market close for that day's data).
+    Only fall back to yfinance if Fyers returns insufficient data."""
+    live = get_nifty_sector_data_live()
+    # If Fyers returned real data for at least half the sectors, use it
+    valid = sum(1 for v in live.values() if v != "N/A")
+    if valid >= 4:
+        return live
     return get_nifty_sector_data_afterhours()
 
 
@@ -1312,11 +1312,11 @@ def get_nifty_sector_changes_afterhours():
 
 
 def get_nifty_sector_changes():
-    """Auto-switch: Fyers live during market hours, yfinance last-close after hours."""
-    if is_indian_market_hours():
-        live = get_nifty_sector_changes_live()
-        if len(live) >= 4:  # Fyers returned data for enough sectors
-            return live
+    """Always try Fyers first (works even after market close for that day's data).
+    Only fall back to yfinance if Fyers returns insufficient data."""
+    live = get_nifty_sector_changes_live()
+    if len(live) >= 4:  # Fyers returned data for enough sectors
+        return live
     return get_nifty_sector_changes_afterhours()
 
 @st.cache_data(ttl=900)
