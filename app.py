@@ -2105,7 +2105,7 @@ def get_smart_quotes(tickers):
 
 
 @st.fragment(run_every="10s")
-def dashboard_snapshot(nifty_data):
+def dashboard_snapshot():
     now_refresh = datetime.now(timezone.utc).astimezone(pytz.timezone('Asia/Kolkata')).strftime("%Y-%m-%d %H:%M:%S")
     col_r1, col_r2 = st.columns([6, 1])
     with col_r1:
@@ -2118,8 +2118,16 @@ def dashboard_snapshot(nifty_data):
     fyers_tickers = ["^NSEI", "^BSESN", "^NSEBANK", "^CNXIT", "GC=F", "CL=F", "INR=X", "SI=F"]
     live_q, data_source = get_smart_quotes(fyers_tickers)
 
+    # ── Fetch sector data fresh on every fragment tick ──
+    # get_nifty_sector_data() uses ttl=30s cache during market hours (Fyers live)
+    # and ttl=900s cache after hours (yfinance). The fragment fires every 10s,
+    # so the cache expires and fresh data is picked up automatically.
+    live_nifty_data = get_nifty_sector_data()
+    sector_data_source = "Fyers Live" if is_indian_market_hours() and any(
+        v != "N/A" for v in live_nifty_data.values()
+    ) else "Last Close"
+
     live_quote_count = sum(1 for quote in live_q.values() if quote.get("lp", 0))
-    valid_sector_points = sum(1 for value in nifty_data.values() if value != "N/A")
 
     if live_quote_count == 0:
         st.warning(
@@ -2191,9 +2199,9 @@ def dashboard_snapshot(nifty_data):
     st.markdown("</div>", unsafe_allow_html=True)
     st.divider()
 
-    # Sector Heatmap
-    st.markdown("### 📈 Sector Performance")
-    st.plotly_chart(create_sector_heatmap(nifty_data), width="stretch", config={"displayModeBar": False})
+    # Sector Heatmap — uses live_nifty_data fetched fresh this tick
+    st.markdown(f"### 📈 Sector Performance ({sector_data_source})")
+    st.plotly_chart(create_sector_heatmap(live_nifty_data), width="stretch", config={"displayModeBar": False})
 
 # ── REPORT MODE ──
 if generate:
@@ -2374,7 +2382,7 @@ if generate:
 
 # ── DASHBOARD MODE ──
 else:
-    dashboard_snapshot(nifty_data)
+    dashboard_snapshot()
 
     st.divider()
     st.markdown("""<div class="glass-card" style="text-align:center;padding:30px;">
