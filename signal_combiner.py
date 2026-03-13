@@ -301,8 +301,8 @@ class HybridSignalCombiner:
         technical: dict,
         sentiment: dict,
         sector: str,
-        daily_change_pct: float = 0.0,
-    ) -> HybridSignal:
+            daily_change_pct: float = 0.0,
+        ) -> HybridSignal:
         """
         Momentum-first signal combination.
 
@@ -314,14 +314,18 @@ class HybridSignalCombiner:
             sector: sector name
             daily_change_pct: Nifty sector % change today
         """
+        # Defensive check for None
+        if daily_change_pct is None:
+            daily_change_pct = 0.0
+            
         reasoning = []
 
         # ── Step 1: Compute component scores ──
 
         # Get weekly and monthly change from technical data for multi-timeframe momentum
         index_analysis = technical.get("index_analysis") or {}
-        weekly_change = index_analysis.get("weekly_change", 0.0)
-        monthly_change = index_analysis.get("monthly_change", 0.0)
+        weekly_change = index_analysis.get("weekly_change") or 0.0
+        monthly_change = index_analysis.get("monthly_change") or 0.0
         
         # If index doesn't have weekly/monthly change, try stock average
         if weekly_change == 0.0:
@@ -347,6 +351,10 @@ class HybridSignalCombiner:
 
         # Get volume data from technical analysis (sector-level)
         volume_data = index_analysis.get("volume", {"ratio": 1.0, "is_anomaly": False, "signal": "NORMAL", "data_valid": True})
+        # Sanitize ratio if it exists but is None
+        if volume_data.get("ratio") is None:
+            volume_data["ratio"] = 1.0
+            
         volume_score, volume_label = self.compute_volume_score(volume_data, daily_change_pct)
 
         sent_score, sent_label = self.compute_sentiment_score(sentiment, daily_change_pct)
