@@ -11,4 +11,4 @@ transformers
 torch
 numpy
 plotly
-yfinance
+streamlit-autorefresh

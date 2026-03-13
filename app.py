@@ -19,6 +19,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 import pytz
 import streamlit.components.v1 as components
+from streamlit_autorefresh import st_autorefresh
+
+# ── Market Hours Auto-refresh ──
+ist = pytz.timezone("Asia/Kolkata")
+now = datetime.now(ist)
+
+market_open = (
+    now.weekday() < 5 and
+    (now.hour > 9 or (now.hour == 9 and now.minute >= 15)) and
+    (now.hour < 15 or (now.hour == 15 and now.minute <= 30))
+)
+
+if market_open:
+    st_autorefresh(interval=10000, key="data_refresh")
+else:
+    st.info("🕒 Market is closed. Live tracking paused.")
 
 # ── Local ML modules ──
 from sentiment_engine import SentimentEngine
