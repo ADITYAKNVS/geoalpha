@@ -38,6 +38,11 @@ else:
 
 # ── Local ML modules ──
 from sentiment_engine import SentimentEngine
+from sector_report_utils import (
+    build_sector_stock_contribution_lines,
+    build_sector_technical_snapshot,
+    inject_sector_technical_sections,
+)
 from technical_guardrails import (
     TechnicalGuardrails,
     SECTOR_TICKERS,
@@ -708,21 +713,7 @@ def classify_move_type(technical, sentiment, daily_change_pct):
 
 
 def build_technical_confirmation(technical):
-    index_analysis = technical.get("index_analysis") or {}
-    ma_data = index_analysis.get("ma", {})
-    volume_data = index_analysis.get("volume", {})
-    weekly_change = index_analysis.get("weekly_change", 0.0)
-    monthly_change = index_analysis.get("monthly_change", 0.0)
-
-    ma_signal = ma_data.get("signal", "NEUTRAL")
-    ma_spread = ma_data.get("spread_pct", 0.0)
-    volume_ratio = volume_data.get("ratio", 1.0)
-    volume_signal = volume_data.get("signal", "NORMAL")
-    return (
-        f"MA trend {ma_signal} (spread {ma_spread:+.2f}%), "
-        f"volume {volume_signal} ({volume_ratio:.1f}x), "
-        f"weekly {weekly_change:+.2f}%, monthly {monthly_change:+.2f}%"
-    )
+    return build_sector_technical_snapshot(technical)["summary"]
 
 
 def build_key_risk(technical, sentiment, daily_change_pct):
@@ -804,13 +795,18 @@ def build_sector_driver_dossier(sector, technical, sentiment, daily_change_pct):
             primary_driver = "Sector flow appears broader than any single article."
             secondary_driver = "Use technical confirmation and breadth to judge persistence."
 
+    technical_snapshot = build_sector_technical_snapshot(technical)
+    stock_contribution_lines = build_sector_stock_contribution_lines(technical)
+
     return {
         "sector": sector,
         "move_type": move_type,
         "evidence_state": evidence_state,
         "primary_driver": primary_driver,
         "secondary_driver": secondary_driver,
-        "technical_confirmation": build_technical_confirmation(technical),
+        "technical_confirmation": technical_snapshot["summary"],
+        "technical_indicator_lines": technical_snapshot["lines"],
+        "stock_contribution_lines": stock_contribution_lines,
         "key_risk": build_key_risk(technical, sentiment, daily_change_pct),
         "pressure_context": build_pressure_language(technical),
         "causality_note": build_causality_note(ranked_evidence, move_type, evidence_state),
@@ -1549,6 +1545,16 @@ def analyze_with_llm(prices, nifty_data, selected_sectors, hybrid_results,
             signal_context += f"  Primary Driver: {dossier.get('primary_driver', '')}\n"
             signal_context += f"  Secondary Driver: {dossier.get('secondary_driver', '')}\n"
             signal_context += f"  Technical Confirmation: {dossier.get('technical_confirmation', '')}\n"
+            technical_lines = dossier.get("technical_indicator_lines", [])
+            if technical_lines:
+                signal_context += "  MANDATORY TECHNICAL INDICATORS:\n"
+                for line in technical_lines:
+                    signal_context += f"    - {line}\n"
+            stock_contribution_lines = dossier.get("stock_contribution_lines", [])
+            if stock_contribution_lines:
+                signal_context += "  STOCK CONTRIBUTION:\n"
+                for line in stock_contribution_lines[:2]:
+                    signal_context += f"    - {line}\n"
             signal_context += f"  Volume Interpretation: {dossier.get('pressure_context', '')}\n"
             signal_context += f"  Causality Note: {dossier.get('causality_note', '')}\n"
             signal_context += f"  Key Risk / Contradiction: {dossier.get('key_risk', '')}\n"
@@ -1624,6 +1630,11 @@ For each sector provide:
   - Do NOT force a fake headline-driven explanation if the price moved against the news.
   - If it is NEWS_DRIVEN, lead with the ranked evidence.
 
+📈 TECHNICAL INDICATORS:
+  - This section is MANDATORY for every sector.
+  - Explicitly show RSI with zone, MA20 vs MA50 with the trend signal, support/resistance, breakout/breakdown state, and volume ratio.
+  - Use the exact technical lines supplied above. If a value is unavailable, say unavailable instead of skipping the section.
+
 🌍 GLOBAL / REGULATORY / SECTOR NEWS DRIVERS:
   - Use the provided news buckets.
   - Prefer geopolitical/global macro themes if present.
@@ -1658,6 +1669,7 @@ For each sector provide:
 ### [Sector] | Nifty: [exact %] | Signal: [use the pre-computed signal above]
 
 - Reasoning: [3 points — technical + sentiment + ONLY relevant macro factors]
+- Mandatory Technical Indicators: include RSI, MA20 vs MA50, support/resistance, breakout/breakdown state, and volume ratio for every sector.
 - IMPORTANT: Only reference macro factors marked as CRITICAL. Do NOT use IRRELEVANT factors.
 - Move Type: Use the supplied classification. If it says TECHNICAL_ONLY or widely diverges from the news, explicitly state that the move was driven by near-term institutional positioning and capital flows. Do NOT invent a news catalyst if price moved against the news.
 - News Drivers: Use the supplied sector/global/regulatory news buckets and mention 1-2 concrete themes. 
@@ -1676,6 +1688,7 @@ Price momentum is the PRIMARY signal and uses a stable multi-timeframe calculati
 RULES:
 1. The signal (\U0001f7e2/\U0001f7e1/\U0001f534) has been computed by a hybrid ML system. Use it EXACTLY as provided.
 2. Explain the reasoning using the technical, momentum, volume, and sentiment data provided.
+2A. EVERY sector output MUST include a dedicated "TECHNICAL INDICATORS" section with RSI, MA20/MA50, support/resistance, breakout or breakdown state, and volume ratio.
 3. Use ONLY the data provided. Never invent news, fundamentals, or data.
 4. Use exact prices and percentages from the data.
 5. Only reference currently listed NSE companies.
@@ -1786,7 +1799,7 @@ Analyze: {sectors_text}"""
         try:
             response = gemini_client.models.generate_content(
                 model="models/gemini-2.5-flash", contents=f"{system_prompt}\n\n{user_prompt}")
-            return response.text
+            return inject_sector_technical_sections(response.text, sector_dossiers or {}, deep_dive=True)
         except Exception as exc:
             log_fetch_warning("Gemini analysis", exc)
             return f"⚠️ Gemini error: {str(exc)}"
@@ -1795,7 +1808,11 @@ Analyze: {sectors_text}"""
             response = client.chat.completions.create(
                 model="llama-3.1-8b-instant", temperature=0.0, max_tokens=1000,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}])
-            return response.choices[0].message.content
+            return inject_sector_technical_sections(
+                response.choices[0].message.content,
+                sector_dossiers or {},
+                deep_dive=False,
+            )
         except Exception as exc:
             log_fetch_warning("Groq analysis", exc)
             if "rate_limit" in str(exc).lower():
@@ -1919,6 +1936,22 @@ def render_signal_card(hybrid_signal):
 def render_evidence_panel(dossier):
     taxonomy = ", ".join(dossier.get("taxonomy", [])) if dossier.get("taxonomy") else "none"
     evidence_html = ""
+    technical_lines = dossier.get("technical_indicator_lines", [])
+    technical_html = ""
+    if technical_lines:
+        technical_html = "".join(
+            f'<div style="color:#b8c6db;font-size:12px;margin-top:4px;">• {line}</div>'
+            for line in technical_lines
+        )
+
+    stock_contribution_lines = dossier.get("stock_contribution_lines", [])
+    stock_contribution_html = ""
+    if stock_contribution_lines:
+        stock_contribution_html = "".join(
+            f'<div style="color:#e8e8f0;font-size:12px;margin-top:4px;">• {line}</div>'
+            for line in stock_contribution_lines[:2]
+        )
+
     for item in dossier.get("ranked_evidence", []):
         evidence_html += f"""
         <div style="padding:10px 0;border-top:1px solid rgba(255,255,255,0.06);">
@@ -1951,6 +1984,12 @@ def render_evidence_panel(dossier):
         <div style="margin-top:12px;color:#e8e8f0;font-size:13px;"><strong>Primary:</strong> {dossier.get('primary_driver', '')}</div>
         <div style="margin-top:6px;color:#e8e8f0;font-size:13px;"><strong>Secondary:</strong> {dossier.get('secondary_driver', '')}</div>
         <div style="margin-top:6px;color:#e8e8f0;font-size:13px;"><strong>Technical:</strong> {dossier.get('technical_confirmation', '')}</div>
+        <div style="margin-top:8px;padding:10px;border-radius:10px;background:rgba(41,121,255,0.08);border:1px solid rgba(41,121,255,0.18);">
+            <div style="color:#7fb3ff;font-size:11px;font-weight:700;letter-spacing:0.04em;">MANDATORY TECHNICAL INDICATORS</div>
+            {technical_html or '<div style="color:#b8c6db;font-size:12px;margin-top:4px;">No technical detail lines available.</div>'}
+        </div>
+        <div style="margin-top:8px;color:#e8e8f0;font-size:13px;"><strong>Stock Contribution:</strong></div>
+        {stock_contribution_html or '<div style="color:#888;font-size:12px;margin-top:4px;">No stock contribution lines available.</div>'}
         <div style="margin-top:6px;color:#e8e8f0;font-size:13px;"><strong>Pressure:</strong> {dossier.get('pressure_context', '')}</div>
         <div style="margin-top:6px;color:#888;font-size:13px;"><strong>Causality:</strong> {dossier.get('causality_note', '')}</div>
         <div style="margin-top:6px;color:#e8e8f0;font-size:13px;"><strong>Peers:</strong> {dossier.get('peer_snapshot', '')}</div>
