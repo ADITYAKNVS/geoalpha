@@ -1180,16 +1180,58 @@ def get_commodity_prices():
         "pmi_proxy": safe_yf_price("XLI"),
     }
 
+def is_indian_market_hours():
+    """Check if current IST time is within Indian market hours (8 AM - 3:30 PM, weekdays)."""
+    import pytz
+    ist = pytz.timezone('Asia/Kolkata')
+    now_ist = datetime.now(timezone.utc).astimezone(ist)
+    if now_ist.weekday() >= 5:  # Sat/Sun
+        return False
+    market_open = now_ist.replace(hour=8, minute=0, second=0, microsecond=0)
+    market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now_ist <= market_close
+
+
+SECTOR_YF_TICKERS = {
+    "IT": "^CNXIT", "Banking": "^NSEBANK", "FMCG": "^CNXFMCG",
+    "Oil & Gas": "^CNXENERGY", "Pharma": "^CNXPHARMA",
+    "Metals": "^CNXMETAL", "Infrastructure": "^CNXINFRA", "Gold": "GOLDBEES.NS"
+}
+
+
+def _get_sector_changes_from_fyers():
+    """Fetch intraday % change for all sector indices from Fyers live quotes."""
+    tickers = list(SECTOR_YF_TICKERS.values())
+    live_q = get_live_quotes(tickers)  # returns {ticker: {lp, ch, chp}}
+    changes = {}
+    for name, ticker in SECTOR_YF_TICKERS.items():
+        chp = live_q.get(ticker, {}).get("chp", 0)
+        if chp:  # non-zero = Fyers returned real data
+            changes[name] = round(chp, 2)
+    return changes  # empty dict if Fyers failed
+
+
+@st.cache_data(ttl=30)
+def get_nifty_sector_data_live():
+    """Sector performance strings using Fyers live quotes (market hours only)."""
+    changes = _get_sector_changes_from_fyers()
+    performance = {}
+    for name in SECTOR_YF_TICKERS:
+        chp = changes.get(name)
+        if chp is not None:
+            arrow = "📈" if chp > 0 else "📉"
+            performance[name] = f"{arrow} {'+' if chp > 0 else ''}{chp}%"
+        else:
+            performance[name] = "N/A"
+    return performance
+
+
 @st.cache_data(ttl=900)
-def get_nifty_sector_data():
-    sectors = {
-        "IT": "^CNXIT", "Banking": "^NSEBANK", "FMCG": "^CNXFMCG",
-        "Oil & Gas": "^CNXENERGY", "Pharma": "^CNXPHARMA",
-        "Metals": "^CNXMETAL", "Infrastructure": "^CNXINFRA", "Gold": "GOLDBEES.NS"
-    }
+def get_nifty_sector_data_afterhours():
+    """Sector performance strings using yfinance last-close (after hours)."""
     import yfinance as yf
     performance = {}
-    for name, ticker in sectors.items():
+    for name, ticker in SECTOR_YF_TICKERS.items():
         try:
             hist = yf.Ticker(ticker).history(period="2d")
             if len(hist) >= 2:
@@ -1199,7 +1241,6 @@ def get_nifty_sector_data():
             else:
                 performance[name] = "N/A"
         except Exception as exc:
-            # Fallback to Fyers history
             try:
                 hist = fetch_historical_data(ticker, period="5d")
                 if len(hist) >= 2:
@@ -1213,16 +1254,30 @@ def get_nifty_sector_data():
                 performance[name] = "N/A"
     return performance
 
+
+def get_nifty_sector_data():
+    """Auto-switch: Fyers live during market hours, yfinance last-close after hours."""
+    if is_indian_market_hours():
+        live = get_nifty_sector_data_live()
+        # If Fyers returned real data for at least half the sectors, use it
+        valid = sum(1 for v in live.values() if v != "N/A")
+        if valid >= 4:
+            return live
+    return get_nifty_sector_data_afterhours()
+
+
+@st.cache_data(ttl=30)
+def get_nifty_sector_changes_live():
+    """Sector % changes as floats using Fyers live quotes (market hours only)."""
+    return _get_sector_changes_from_fyers()
+
+
 @st.cache_data(ttl=900)
-def get_nifty_sector_changes():
-    sectors = {
-        "IT": "^CNXIT", "Banking": "^NSEBANK", "FMCG": "^CNXFMCG",
-        "Oil & Gas": "^CNXENERGY", "Pharma": "^CNXPHARMA",
-        "Metals": "^CNXMETAL", "Infrastructure": "^CNXINFRA", "Gold": "GOLDBEES.NS"
-    }
+def get_nifty_sector_changes_afterhours():
+    """Sector % changes as floats using yfinance last-close (after hours)."""
     import yfinance as yf
     changes = {}
-    for name, ticker in sectors.items():
+    for name, ticker in SECTOR_YF_TICKERS.items():
         try:
             hist = yf.Ticker(ticker).history(period="2d")
             if len(hist) >= 2:
@@ -1230,7 +1285,6 @@ def get_nifty_sector_changes():
             else:
                 changes[name] = 0.0
         except Exception as exc:
-            # Fallback to Fyers history
             try:
                 hist = fetch_historical_data(ticker, period="5d")
                 if len(hist) >= 2:
@@ -1241,6 +1295,15 @@ def get_nifty_sector_changes():
                 log_fetch_warning(f"Nifty sector change [{name}]", exc)
                 changes[name] = 0.0
     return changes
+
+
+def get_nifty_sector_changes():
+    """Auto-switch: Fyers live during market hours, yfinance last-close after hours."""
+    if is_indian_market_hours():
+        live = get_nifty_sector_changes_live()
+        if len(live) >= 4:  # Fyers returned data for enough sectors
+            return live
+    return get_nifty_sector_changes_afterhours()
 
 @st.cache_data(ttl=900)
 def get_all_news():
@@ -1996,15 +2059,7 @@ def get_delta(hist):
     return 0, 0, 0
 
 # ── DASHBOARD FRAGMENT: Auto-refreshing Snapshot ──
-def is_indian_market_hours():
-    """Check if current IST time is within Indian market hours (8 AM - 3:30 PM, weekdays)."""
-    ist = pytz.timezone('Asia/Kolkata')
-    now_ist = datetime.now(timezone.utc).astimezone(ist)
-    if now_ist.weekday() >= 5:  # Sat/Sun
-        return False
-    market_open = now_ist.replace(hour=8, minute=0, second=0, microsecond=0)
-    market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
-    return market_open <= now_ist <= market_close
+# is_indian_market_hours() is defined above near get_nifty_sector_data()
 
 
 def get_yf_quotes(tickers):
