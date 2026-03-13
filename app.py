@@ -76,11 +76,9 @@ fyers = fyersModel.FyersModel(client_id=FYERS_CLIENT_ID, is_async=False, token=F
 def load_sentiment_engine():
     return SentimentEngine()
 
-@st.cache_resource
 def load_technical_guardrails():
     return TechnicalGuardrails()
 
-@st.cache_resource
 def load_signal_combiner():
     return HybridSignalCombiner()
 
