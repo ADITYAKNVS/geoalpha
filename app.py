@@ -1505,7 +1505,7 @@ def analyze_with_llm(prices, nifty_data, selected_sectors, hybrid_results,
             for p in avoid_picks:
                 signal_context += f"    \U0001f534 {p['name']}: {p['reason']} (tech score: {p.get('score', 0):.3f}, daily: {p.get('daily_change', 0):+.2f}%, RSI: {p.get('rsi', 50):.0f})\n"
         if not avoid_picks:
-            signal_context += "  NO STOCKS TO AVOID: All stocks in this sector have neutral-to-positive momentum.\n"
+            signal_context += "  NO STOCKS TO AVOID: The system currently does not explicitly flag specific stocks for avoidance (could be due to broad-based movement or lack of individual volume anomalies).\n"
 
         dossier = (sector_dossiers or {}).get(sector, {})
         if dossier:
@@ -1659,7 +1659,7 @@ RULES:
 8. STOCK PICKS: Use the pre-computed momentum-verified picks EXACTLY as provided.
    - NEVER override stock picks. If the system says a stock is a top pick, explain WHY using the provided reason.
    - NEVER add a stock to the avoid list unless the system explicitly flagged it as avoid.
-   - If no stocks are flagged to avoid, say "All stocks show neutral-to-positive momentum."
+   - If no stocks are flagged to avoid, state that the system does not explicitly flag any specific stocks for avoidance (do NOT claim they have positive momentum if the sector is down).
    - Explain WHY each stock benefits/suffers based on the SPECIFIC mechanism and data provided.
 9. ANTI-HALLUCINATION RULES (CRITICAL):
    - You are evaluating INTRADAY MOMENTUM. Long-term fundamental analysis is strictly FORBIDDEN.
