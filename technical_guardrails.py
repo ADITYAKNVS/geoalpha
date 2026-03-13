@@ -273,12 +273,18 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
     # tomorrow ensures the Fyers API includes today's completed daily
     # candle instead of omitting it or returning a placeholder row.
     now = datetime.now()
-    if is_market_open():
+    market_open = is_market_open()
+    if market_open:
         range_to = now.strftime("%Y-%m-%d")
     else:
         range_to = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     range_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     fyers_symbol = map_yf_to_fyers(ticker)
+
+    logger.info(
+        "[fetch_historical_data] %s -> %s | market_open=%s | range=%s to %s | server_now=%s",
+        ticker, fyers_symbol, market_open, range_from, range_to, now.isoformat(),
+    )
 
     data = {
         "symbol": fyers_symbol,
@@ -294,13 +300,20 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
     except Exception as exc:
         logger.warning("Fyers historical fetch failed for %s (%s): %s", ticker, fyers_symbol, exc)
         return df
-    if response and response.get("s") == "ok" and "candles" in response and len(response["candles"]) > 0:
+
+    raw_candle_count = len(response.get("candles", [])) if response else 0
+    if response and response.get("s") == "ok" and "candles" in response and raw_candle_count > 0:
         cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
         df = pd.DataFrame(response["candles"], columns=cols)
         df["Datetime"] = pd.to_datetime(df["Datetime"], unit="s")
         df.set_index("Datetime", inplace=True)
     else:
-        logger.warning("Fyers historical response not ok for %s (%s): %s", ticker, fyers_symbol, response)
+        logger.warning(
+            "Fyers historical response not ok for %s (%s). raw_candles=%d, response_code=%s, message=%s",
+            ticker, fyers_symbol, raw_candle_count,
+            response.get("code") if response else "NO_RESPONSE",
+            response.get("message", "") if response else "NO_RESPONSE",
+        )
 
     # CLEANING & VALIDATION:
     # - Drop rows with NaN OHLC values
@@ -308,13 +321,14 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
     # - After hours: drop any future-date placeholder candles
     # This ensures we only keep valid completed daily candles and never treat
     # placeholder / bad data as a real bar.
+    pre_clean_len = len(df)
     if not df.empty:
         df = df[~df[["Open", "High", "Low", "Close"]].isna().any(axis=1)]
         df = df[(df[["Open", "High", "Low", "Close"]] > 0).all(axis=1)]
 
         # After hours: trim any candle whose date is strictly after today
         # (could appear because we set range_to = tomorrow).
-        if not is_market_open():
+        if not market_open:
             today_end = pd.Timestamp(now.strftime("%Y-%m-%d")) + pd.Timedelta(days=1)
             df = df[df.index < today_end]
 
@@ -322,6 +336,12 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
             logger.warning("All candles filtered out as invalid for %s (%s)", ticker, fyers_symbol)
             return df
         df.sort_index(inplace=True)
+
+    logger.info(
+        "[fetch_historical_data] %s | raw_candles=%d | pre_clean=%d | final=%d | last_date=%s",
+        ticker, raw_candle_count, pre_clean_len, len(df),
+        df.index[-1] if not df.empty else "EMPTY",
+    )
 
     return df
 
