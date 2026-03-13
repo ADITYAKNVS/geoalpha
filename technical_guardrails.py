@@ -448,7 +448,8 @@ class TechnicalGuardrails:
         RSI < 30 = oversold (bullish signal)
         """
         if len(closes) < period + 1:
-            return 50.0  # neutral default
+            # Not enough history to compute a stable RSI signal
+            return None
 
         deltas = np.diff(closes)
         gains = np.where(deltas > 0, deltas, 0)
@@ -480,10 +481,13 @@ class TechnicalGuardrails:
         Recent crossover = strong signal
         """
         if len(closes) < 50:
+            # Explicitly mark as insufficient data rather than fake neutral.
             return {
-                "ma20": 0, "ma50": 0,
-                "crossover": "insufficient_data",
-                "signal": "NEUTRAL", "strength": 0.0
+                "ma20": None,
+                "ma50": None,
+                "crossover": "INSUFFICIENT_DATA",
+                "signal": "INSUFFICIENT_DATA",
+                "strength": 0.0,
             }
 
         ma20 = np.mean(closes[-20:])
@@ -553,11 +557,12 @@ class TechnicalGuardrails:
         FIX v2.1: Handles zero-volume data (sector indices don't have volume).
         """
         if len(volumes) < 21:
+            # Too few candles to build a robust 20‑day average.
             return {
                 "is_anomaly": False,
-                "ratio": 1.0,
-                "signal": "NORMAL",
-                "data_valid": len(volumes) >= 5,
+                "ratio": None,
+                "signal": "NO_DATA",
+                "data_valid": False,
             }
 
         avg_20 = np.mean(volumes[-21:-1])  # 20-day avg excluding today
@@ -624,7 +629,7 @@ class TechnicalGuardrails:
         v2.1: Compute 5-day (weekly) % change for multi-timeframe momentum.
         """
         if len(closes) < 6:
-            return 0.0
+            return None
         return round(((closes[-1] - closes[-6]) / closes[-6]) * 100, 2)
 
     # ── Monthly Change Calculator ───────────────────────────────
@@ -634,7 +639,7 @@ class TechnicalGuardrails:
         v2.8: Compute 20-day (monthly) % change for multi-timeframe momentum.
         """
         if len(closes) < 21:
-            return 0.0
+            return None
         return round(((closes[-1] - closes[-21]) / closes[-21]) * 100, 2)
 
     @staticmethod
@@ -715,25 +720,35 @@ class TechnicalGuardrails:
             breakout_context = self.compute_breakout_context(highs, lows, closes)
             intraday_context = self.compute_intraday_context(highs, lows)
 
+            # If we don't have enough data for the core indicators (RSI, MA, volume),
+            # return an explicit insufficient‑data result instead of pretending to be neutral.
+            core_insufficient = (
+                rsi is None
+                and ma_signal.get("signal") == "INSUFFICIENT_DATA"
+                and not volume_info.get("data_valid", False)
+            )
+            if core_insufficient:
+                return self._neutral_result(ticker, "insufficient candles for RSI/MA/volume")
+
             # ── Composite signal ──
             score = 0.0  # -1.0 (full bearish) to +1.0 (full bullish)
             reasons = []
 
             # RSI contribution (weight: 0.30)
             # v2.9: 60-70 is moderately bullish (strong momentum), >70 is overbought (bearish)
-            if rsi >= 70:
+            if rsi is not None and rsi >= 70:
                 score -= 0.30
                 reasons.append(f"RSI {rsi} — overbought")
-            elif rsi >= 60:
+            elif rsi is not None and rsi >= 60:
                 score += 0.15
                 reasons.append(f"RSI {rsi} — moderately bullish (strong momentum)")
-            elif rsi <= 30:
+            elif rsi is not None and rsi <= 30:
                 score += 0.30
                 reasons.append(f"RSI {rsi} — oversold (reversal likely)")
-            elif rsi <= 40:
+            elif rsi is not None and rsi <= 40:
                 score -= 0.10
                 reasons.append(f"RSI {rsi} — weak (near oversold)")
-            else:
+            elif rsi is not None:
                 reasons.append(f"RSI {rsi} — neutral zone")
 
             # MA crossover contribution (weight: 0.35)

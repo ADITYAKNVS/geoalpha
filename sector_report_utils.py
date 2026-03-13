@@ -29,10 +29,20 @@ def classify_rsi_zone(rsi) -> str:
 
 def build_sector_technical_snapshot(technical: dict) -> dict:
     # analyze_sector() nests the index-level data inside "index_analysis".
-    # If it's None (index ticker failed), fall back to empty dict for safe defaults.
+    # If it's None (index ticker failed) or status == "error", treat this as
+    # an explicit INS UFFICIENT_DATA case rather than silently fabricating neutral values.
     idx = technical.get("index_analysis") or {}
-    if idx.get("status") == "error":
-        idx = {}
+    if idx.get("status") == "error" or technical.get("status") == "error":
+        return {
+            "summary": "Technical data: INSUFFICIENT_DATA (daily RSI/MA/volume not reliable for this sector/index).",
+            "lines": [
+                "RSI: N/A (insufficient data)",
+                "Moving averages: MA20 N/A vs MA50 N/A (INSUFFICIENT_DATA)",
+                "Support / resistance: N/A (recent range cannot be computed reliably)",
+                "Volume: N/A (NO_DATA or unstable history); daily move shown from price only",
+                "Price structure: gaps / weekly / monthly structure omitted due to limited history",
+            ],
+        }
 
     ma = idx.get("ma", {})
     volume = idx.get("volume", {})

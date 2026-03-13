@@ -245,14 +245,26 @@ class HybridSignalCombiner:
 
         Returns: (score, label)
         """
+        # If the guardrails explicitly reported an error / insufficient data,
+        # treat technicals as neutral in the composite and surface that fact
+        # via the label so the report can say "INSUFFICIENT_DATA" instead of
+        # pretending to have a real bullish/bearish read.
+        if technical.get("status") == "error":
+            return (0.50, "INSUFFICIENT_DATA")
+
         direction = technical.get("direction", "NEUTRAL")
-        confidence = technical.get("confidence", 0.3)
         raw_score = technical.get("score", 0.0)
 
         # Map technical score (-1.0 to +1.0) → (0.0 to 1.0)
         # score of +0.5 → 0.75, score of -0.5 → 0.25, score of 0 → 0.50
         normalized = (raw_score + 1.0) / 2.0
         normalized = max(0.0, min(1.0, normalized))
+
+        # If all key fields are missing, also downgrade to INS UFFICIENT_DATA.
+        ma = technical.get("index_analysis", {}).get("ma", {}) if "index_analysis" in technical else technical.get("ma", {})
+        rsi = technical.get("index_analysis", {}).get("rsi") if "index_analysis" in technical else technical.get("rsi")
+        if rsi is None and ma.get("ma20") is None and ma.get("ma50") is None:
+            return (0.50, "INSUFFICIENT_DATA")
 
         return (normalized, direction)
 

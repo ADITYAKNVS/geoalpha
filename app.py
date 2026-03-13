@@ -742,8 +742,17 @@ def classify_move_type(technical, sentiment, daily_change_pct):
     relevant_count = sentiment.get("relevant_count", 0)
     technical_direction = technical.get("direction", "NEUTRAL")
     stock_consensus = technical.get("stock_consensus", "NO_DATA")
-    volume_signal = (technical.get("index_analysis") or {}).get("volume", {}).get("signal", "NORMAL")
-    volume_ratio = (technical.get("index_analysis") or {}).get("volume", {}).get("ratio", 1.0)
+    index_analysis = technical.get("index_analysis") or {}
+    volume_info = index_analysis.get("volume", {}) or {}
+    volume_signal = volume_info.get("signal", "NORMAL")
+    volume_ratio = volume_info.get("ratio", 1.0 if volume_signal != "NO_DATA" else 0.0)
+
+    # If technical status is error / insufficient data, do NOT treat this as a
+    # valid neutral technical move. Fall back to price + sentiment only.
+    if technical.get("status") == "error":
+        if relevant_count >= 3 and abs(daily_change_pct) >= 0.75:
+            return "NEWS_DRIVEN"
+        return "SECTOR_DRIVEN"
 
     # SIDEWAYS GATE: flat move + low volume = no real move to explain
     if abs(daily_change_pct) < 0.25 and volume_ratio < 0.8:
