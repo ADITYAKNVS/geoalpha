@@ -1211,7 +1211,6 @@ def _get_sector_changes_from_fyers():
     return changes  # empty dict if Fyers failed
 
 
-@st.cache_data(ttl=10)
 def get_nifty_sector_data_live():
     """Sector performance strings using Fyers live quotes (market hours only)."""
     changes = _get_sector_changes_from_fyers()
@@ -1266,7 +1265,6 @@ def get_nifty_sector_data():
     return get_nifty_sector_data_afterhours()
 
 
-@st.cache_data(ttl=10)
 def get_nifty_sector_changes_live():
     """Sector % changes as floats using Fyers live quotes (market hours only)."""
     return _get_sector_changes_from_fyers()
