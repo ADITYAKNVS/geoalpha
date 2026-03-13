@@ -1211,7 +1211,7 @@ def _get_sector_changes_from_fyers():
     return changes  # empty dict if Fyers failed
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=10)
 def get_nifty_sector_data_live():
     """Sector performance strings using Fyers live quotes (market hours only)."""
     changes = _get_sector_changes_from_fyers()
@@ -1266,7 +1266,7 @@ def get_nifty_sector_data():
     return get_nifty_sector_data_afterhours()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=10)
 def get_nifty_sector_changes_live():
     """Sector % changes as floats using Fyers live quotes (market hours only)."""
     return _get_sector_changes_from_fyers()
@@ -2006,26 +2006,90 @@ def create_sentiment_gauge(sentiment_data):
     )
     return fig
 
-def create_sector_heatmap(nifty_data):
-    sectors = list(nifty_data.keys())
-    values = []
-    for v in nifty_data.values():
-        try:
-            values.append(float(v.replace("📈","").replace("📉","").replace("%","").replace("+","").strip()))
-        except (AttributeError, ValueError):
-            values.append(0)
+def create_sector_ticker_tape(sector_changes):
+    """Build a scrolling ticker-tape HTML strip with live sector % changes."""
+    sector_icons = {
+        "IT": "💻", "Banking": "🏦", "FMCG": "🛒", "Oil & Gas": "⛽",
+        "Pharma": "💊", "Metals": "⚙️", "Infrastructure": "🏗️", "Gold": "🥇"
+    }
+    items = []
+    for name, chp in sector_changes.items():
+        icon = sector_icons.get(name, "📊")
+        color = "#00e676" if chp > 0 else "#ff1744" if chp < 0 else "#8888a0"
+        arrow = "▲" if chp > 0 else "▼" if chp < 0 else "▬"
+        items.append(
+            f'<span style="margin:0 28px;white-space:nowrap;">'
+            f'{icon} <strong>{name}</strong> '
+            f'<span style="color:{color};font-weight:700;">{arrow} {chp:+.2f}%</span>'
+            f'</span>'
+        )
+    tape_content = "".join(items)
+    # Duplicate content for seamless loop
+    return f"""
+    <style>
+    @keyframes ticker-scroll {{
+        0%   {{ transform: translateX(0); }}
+        100% {{ transform: translateX(-50%); }}
+    }}
+    .ticker-wrap {{
+        overflow: hidden;
+        background: linear-gradient(90deg, rgba(20,20,35,0.95), rgba(15,15,26,0.95));
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 12px;
+        padding: 12px 0;
+        margin: 8px 0 16px;
+    }}
+    .ticker-move {{
+        display: flex;
+        animation: ticker-scroll 25s linear infinite;
+        width: max-content;
+    }}
+    .ticker-move:hover {{ animation-play-state: paused; }}
+    </style>
+    <div class="ticker-wrap">
+        <div class="ticker-move">
+            {tape_content}{tape_content}
+        </div>
+    </div>
+    """
 
-    colors = ["#ff1744" if v < -1 else "#ff5252" if v < 0 else "#00c853" if v > 1 else "#69f0ae" for v in values]
+
+def create_relative_strength_chart(sector_changes, nifty50_chp):
+    """Build a divergence bar chart: each sector's relative strength vs Nifty50."""
+    sectors = list(sector_changes.keys())
+    rel_strength = [round(sector_changes.get(s, 0) - nifty50_chp, 2) for s in sectors]
+
+    # Sort by relative strength (strongest first)
+    paired = sorted(zip(sectors, rel_strength), key=lambda x: x[1], reverse=True)
+    sectors_sorted = [p[0] for p in paired]
+    rs_sorted = [p[1] for p in paired]
+
+    colors = [
+        "#00e676" if v > 0.5 else "#69f0ae" if v > 0
+        else "#ff1744" if v < -0.5 else "#ff5252"
+        for v in rs_sorted
+    ]
+
     fig = go.Figure(go.Bar(
-        x=values, y=sectors, orientation='h', marker_color=colors,
-        text=[f"{v:+.2f}%" for v in values], textposition='auto',
+        x=rs_sorted, y=sectors_sorted, orientation='h', marker_color=colors,
+        text=[f"{v:+.2f}%" for v in rs_sorted], textposition='auto',
         textfont=dict(color="white", size=13, family="Inter"),
     ))
+    # Add zero-line for Nifty50 benchmark
+    fig.add_vline(x=0, line_width=2, line_dash="dash", line_color="rgba(255,255,255,0.3)")
+    fig.add_annotation(
+        x=0, y=1.05, yref="paper", text=f"Nifty50 ({nifty50_chp:+.2f}%)",
+        showarrow=False, font=dict(color="#8888a0", size=11),
+    )
     fig.update_layout(
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#e8e8f0", family="Inter"), height=300,
-        margin=dict(l=80,r=20,t=10,b=10),
-        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="% Change"),
+        margin=dict(l=100, r=30, t=30, b=10),
+        xaxis=dict(
+            showgrid=True, gridcolor="rgba(255,255,255,0.05)",
+            title="Relative Strength vs Nifty50 (%)",
+            zeroline=True, zerolinecolor="rgba(255,255,255,0.2)",
+        ),
         yaxis=dict(showgrid=False),
     )
     return fig
@@ -2119,13 +2183,15 @@ def dashboard_snapshot():
     live_q, data_source = get_smart_quotes(fyers_tickers)
 
     # ── Fetch sector data fresh on every fragment tick ──
-    # get_nifty_sector_data() uses ttl=30s cache during market hours (Fyers live)
+    # get_nifty_sector_changes() uses ttl=10s cache during market hours (Fyers live)
     # and ttl=900s cache after hours (yfinance). The fragment fires every 10s,
     # so the cache expires and fresh data is picked up automatically.
-    live_nifty_data = get_nifty_sector_data()
-    sector_data_source = "Fyers Live" if is_indian_market_hours() and any(
-        v != "N/A" for v in live_nifty_data.values()
-    ) else "Last Close"
+    live_sector_changes = get_nifty_sector_changes()
+    is_live = is_indian_market_hours() and len(live_sector_changes) >= 4
+    sector_data_source = "Fyers Live" if is_live else "Last Close"
+
+    # Get Nifty50 change for relative strength calculation
+    nifty50_chp = live_q.get("^NSEI", {}).get("chp", 0)
 
     live_quote_count = sum(1 for quote in live_q.values() if quote.get("lp", 0))
 
@@ -2199,9 +2265,14 @@ def dashboard_snapshot():
     st.markdown("</div>", unsafe_allow_html=True)
     st.divider()
 
-    # Sector Heatmap — uses live_nifty_data fetched fresh this tick
-    st.markdown(f"### 📈 Sector Performance ({sector_data_source})")
-    st.plotly_chart(create_sector_heatmap(live_nifty_data), width="stretch", config={"displayModeBar": False})
+    # ── Sector Ticker Tape (scrolling live strip) ──
+    import streamlit.components.v1 as components
+    tape_html = create_sector_ticker_tape(live_sector_changes)
+    components.html(tape_html, height=52, scrolling=False)
+
+    # ── Sector vs Nifty50 Relative Strength ──
+    st.markdown(f"### ⚡ Sector Relative Strength vs Nifty50 ({sector_data_source})")
+    st.plotly_chart(create_relative_strength_chart(live_sector_changes, nifty50_chp), width="stretch", config={"displayModeBar": False})
 
 # ── REPORT MODE ──
 if generate:
