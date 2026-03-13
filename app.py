@@ -2017,7 +2017,7 @@ def create_sector_ticker_tape(sector_changes):
         arrow = "▲" if chp > 0 else "▼" if chp < 0 else "▬"
         items.append(
             f'<span style="margin:0 28px;white-space:nowrap;">'
-            f'{icon} <strong>{name}</strong> '
+            f'{icon} <strong style="color:#e8e8f0;">{name}</strong> '
             f'<span style="color:{color};font-weight:700;">{arrow} {chp:+.2f}%</span>'
             f'</span>'
         )
