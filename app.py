@@ -881,25 +881,31 @@ def get_nifty_50_change():
     try:
         from datetime import datetime, timedelta
         now = datetime.now()
-        if is_market_open():
-            range_to = now.strftime("%Y-%m-%d")
-        else:
-            range_to = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        today_str = now.strftime("%Y-%m-%d")
+        tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
         range_from = (now - timedelta(days=10)).strftime("%Y-%m-%d")
-        data = {
-            "symbol": "NSE:NIFTY 50-INDEX",
-            "resolution": "1D",
-            "date_format": "1",
-            "range_from": range_from,
-            "range_to": range_to,
-            "cont_flag": "1"
-        }
-        response = get_fyers_client().history(data=data)
-        if response and response.get("s") == "ok" and "candles" in response and len(response["candles"]) >= 2:
-            candles = response["candles"]
-            last_close = candles[-1][4]
-            prev_close = candles[-2][4]
-            return round(((last_close - prev_close) / prev_close) * 100, 2)
+
+        # Try tomorrow first (after hours), fall back to today
+        if is_market_open():
+            range_to_attempts = [today_str]
+        else:
+            range_to_attempts = [tomorrow_str, today_str]
+
+        for range_to in range_to_attempts:
+            data = {
+                "symbol": "NSE:NIFTY 50-INDEX",
+                "resolution": "1D",
+                "date_format": "1",
+                "range_from": range_from,
+                "range_to": range_to,
+                "cont_flag": "1"
+            }
+            response = get_fyers_client().history(data=data)
+            if response and response.get("s") == "ok" and "candles" in response and len(response["candles"]) >= 2:
+                candles = response["candles"]
+                last_close = candles[-1][4]
+                prev_close = candles[-2][4]
+                return round(((last_close - prev_close) / prev_close) * 100, 2)
     except Exception as exc:
         log_fetch_warning("Nifty 50 change", exc)
     return 0.0

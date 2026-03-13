@@ -269,68 +269,68 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
         except ValueError:
             pass
 
-    # AFTER-HOURS FIX: When the market is closed, bumping range_to to
-    # tomorrow ensures the Fyers API includes today's completed daily
-    # candle instead of omitting it or returning a placeholder row.
     now = datetime.now()
-    market_open = is_market_open()
-    if market_open:
-        range_to = now.strftime("%Y-%m-%d")
-    else:
-        range_to = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     range_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    today_str = now.strftime("%Y-%m-%d")
+    tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     fyers_symbol = map_yf_to_fyers(ticker)
+    market_open = is_market_open()
 
-    logger.info(
-        "[fetch_historical_data] %s -> %s | market_open=%s | range=%s to %s | server_now=%s",
-        ticker, fyers_symbol, market_open, range_from, range_to, now.isoformat(),
-    )
-
-    data = {
-        "symbol": fyers_symbol,
-        "resolution": "1D",
-        "date_format": "1",
-        "range_from": range_from,
-        "range_to": range_to,
-        "cont_flag": "1",
-    }
-    df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
-    try:
-        response = get_fyers_client().history(data=data)
-    except Exception as exc:
-        logger.warning("Fyers historical fetch failed for %s (%s): %s", ticker, fyers_symbol, exc)
-        return df
-
-    raw_candle_count = len(response.get("candles", [])) if response else 0
-    if response and response.get("s") == "ok" and "candles" in response and raw_candle_count > 0:
-        cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
-        df = pd.DataFrame(response["candles"], columns=cols)
-        df["Datetime"] = pd.to_datetime(df["Datetime"], unit="s")
-        df.set_index("Datetime", inplace=True)
+    # Build the list of range_to values to try.
+    # After hours we try TOMORROW first (captures today's completed candle on
+    # most Fyers setups) then fall back to TODAY (some cloud environments
+    # reject future dates).  During market hours just use today.
+    if market_open:
+        range_to_attempts = [today_str]
     else:
-        logger.warning(
-            "Fyers historical response not ok for %s (%s). raw_candles=%d, response_code=%s, message=%s",
-            ticker, fyers_symbol, raw_candle_count,
-            response.get("code") if response else "NO_RESPONSE",
-            response.get("message", "") if response else "NO_RESPONSE",
-        )
+        range_to_attempts = [tomorrow_str, today_str]
 
-    # CLEANING & VALIDATION:
-    # - Drop rows with NaN OHLC values
-    # - Drop rows where prices are non-positive or all zeros
-    # - After hours: drop any future-date placeholder candles
-    # This ensures we only keep valid completed daily candles and never treat
-    # placeholder / bad data as a real bar.
-    pre_clean_len = len(df)
+    df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+    for attempt_idx, range_to in enumerate(range_to_attempts):
+        logger.info(
+            "[fetch_historical_data] %s -> %s | attempt=%d/%d | range=%s to %s | market_open=%s",
+            ticker, fyers_symbol, attempt_idx + 1, len(range_to_attempts),
+            range_from, range_to, market_open,
+        )
+        data = {
+            "symbol": fyers_symbol,
+            "resolution": "1D",
+            "date_format": "1",
+            "range_from": range_from,
+            "range_to": range_to,
+            "cont_flag": "1",
+        }
+        try:
+            response = get_fyers_client().history(data=data)
+        except Exception as exc:
+            logger.warning("Fyers historical fetch failed for %s (%s): %s", ticker, fyers_symbol, exc)
+            continue  # try next range_to
+
+        raw_candle_count = len(response.get("candles", [])) if response else 0
+        if response and response.get("s") == "ok" and "candles" in response and raw_candle_count > 0:
+            cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
+            df = pd.DataFrame(response["candles"], columns=cols)
+            df["Datetime"] = pd.to_datetime(df["Datetime"], unit="s")
+            df.set_index("Datetime", inplace=True)
+            break  # got data, stop trying
+        else:
+            logger.warning(
+                "Fyers response empty for %s (attempt %d, range_to=%s). code=%s, msg=%s",
+                ticker, attempt_idx + 1, range_to,
+                response.get("code") if response else "NO_RESPONSE",
+                response.get("message", "") if response else "NO_RESPONSE",
+            )
+            # continue to next attempt
+
+    # CLEANING & VALIDATION
     if not df.empty:
         df = df[~df[["Open", "High", "Low", "Close"]].isna().any(axis=1)]
         df = df[(df[["Open", "High", "Low", "Close"]] > 0).all(axis=1)]
 
-        # After hours: trim any candle whose date is strictly after today
-        # (could appear because we set range_to = tomorrow).
-        if not market_open:
-            today_end = pd.Timestamp(now.strftime("%Y-%m-%d")) + pd.Timedelta(days=1)
-            df = df[df.index < today_end]
+        # Trim any future-date candles (safety net)
+        today_end = pd.Timestamp(today_str) + pd.Timedelta(days=1)
+        df = df[df.index < today_end]
 
         if df.empty:
             logger.warning("All candles filtered out as invalid for %s (%s)", ticker, fyers_symbol)
@@ -338,9 +338,8 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
         df.sort_index(inplace=True)
 
     logger.info(
-        "[fetch_historical_data] %s | raw_candles=%d | pre_clean=%d | final=%d | last_date=%s",
-        ticker, raw_candle_count, pre_clean_len, len(df),
-        df.index[-1] if not df.empty else "EMPTY",
+        "[fetch_historical_data] %s | final=%d rows | last_date=%s",
+        ticker, len(df), df.index[-1] if not df.empty else "EMPTY",
     )
 
     return df
