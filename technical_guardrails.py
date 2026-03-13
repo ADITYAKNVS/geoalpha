@@ -291,12 +291,37 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
                 last_dt = df.index[-1].normalize()
                 
                 if last_dt < today_date:
-                    # Create a synthetic candle for today using the live quote
-                    # For a simple technical tail, assuming Open/High/Low are roughly around LTP
-                    # In a full setup we'd fetch actual O/H/L, but close is what matters for RSI/MA
-                    new_row = pd.DataFrame({
-                        "Open": [lp], "High": [lp], "Low": [lp], "Close": [lp], "Volume": [0]
-                    }, index=[today_date])
+                    # Fetch today's actual OHLCV from Fyers intraday history
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    intraday_data = {
+                        "symbol": map_yf_to_fyers(ticker),
+                        "resolution": "1D",
+                        "date_format": "1",
+                        "range_from": today_str,
+                        "range_to": today_str,
+                        "cont_flag": "1",
+                    }
+                    try:
+                        intraday_resp = get_fyers_client().history(data=intraday_data)
+                        if (intraday_resp and intraday_resp.get("s") == "ok"
+                                and intraday_resp.get("candles")
+                                and len(intraday_resp["candles"]) > 0):
+                            c = intraday_resp["candles"][-1]
+                            new_row = pd.DataFrame({
+                                "Open": [c[1]], "High": [c[2]], "Low": [c[3]],
+                                "Close": [c[4]], "Volume": [c[5]]
+                            }, index=[today_date])
+                        else:
+                            # Fyers intraday didn't return today — use live price + 0 volume
+                            new_row = pd.DataFrame({
+                                "Open": [lp], "High": [lp], "Low": [lp],
+                                "Close": [lp], "Volume": [0]
+                            }, index=[today_date])
+                    except Exception:
+                        new_row = pd.DataFrame({
+                            "Open": [lp], "High": [lp], "Low": [lp],
+                            "Close": [lp], "Volume": [0]
+                        }, index=[today_date])
                     df = pd.concat([df, new_row])
         except Exception as exc:
             logger.warning("Failed to stitch live quote for %s: %s", ticker, exc)
