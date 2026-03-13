@@ -15,7 +15,7 @@ import re
 from html import escape
 from groq import Groq
 from google import genai as google_genai
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pytz
 import streamlit.components.v1 as components
@@ -366,10 +366,56 @@ def normalize_article(headline, summary="", url="", image="", source="", publish
     }
 
 
+def _is_article_fresh(article, max_age_days=5):
+    """Return True if the article was published within the last max_age_days days."""
+    pub = article.get("published_at", "")
+    if not pub:
+        return True  # No date → let it through (better to show than miss)
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_age_days)
+
+    # Try epoch timestamp (Finnhub sends integer epoch)
+    try:
+        ts = float(pub)
+        if ts > 1e9:  # Looks like a valid epoch
+            pub_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return pub_dt >= cutoff
+    except (ValueError, TypeError, OSError):
+        pass
+
+    # Try ISO / common string formats
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%d %H:%M:%S %z", "%Y-%m-%d"):
+        try:
+            pub_dt = datetime.strptime(str(pub).strip(), fmt)
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            return pub_dt >= cutoff
+        except ValueError:
+            continue
+
+    # Fallback: try dateutil if available
+    try:
+        from dateutil import parser as du_parser
+        pub_dt = du_parser.parse(str(pub))
+        if pub_dt.tzinfo is None:
+            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+        return pub_dt >= cutoff
+    except Exception:
+        pass
+
+    return True  # Unparseable date → let it through
+
+
 def append_article(target, seen, article):
     headline = article.get("headline", "").strip()
     canonical = canonicalize_headline(headline)
     if not headline or canonical in seen:
+        return
+    # STRICT: Reject articles older than 5 days
+    if not _is_article_fresh(article, max_age_days=5):
         return
     seen.add(canonical)
     target.append(article)
@@ -395,12 +441,14 @@ def classify_news_bucket(headline, summary=""):
 
 def fetch_marketaux_articles(search_query, limit=5, countries=None):
     articles = []
+    five_days_ago = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M")
     params = {
         "api_token": MARKETAUX_API_KEY,
         "search": search_query,
         "language": "en",
         "limit": limit,
         "filter_entities": "true",
+        "published_after": five_days_ago,
     }
     if countries:
         params["countries"] = countries
@@ -434,6 +482,7 @@ def fetch_marketaux_articles(search_query, limit=5, countries=None):
 
 def fetch_gnews_articles(search_query, limit=5):
     articles = []
+    five_days_ago = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         response = requests.get(
             "https://gnews.io/api/v4/search",
@@ -442,6 +491,7 @@ def fetch_gnews_articles(search_query, limit=5):
                 "lang": "en",
                 "max": limit,
                 "apikey": GNEWS_API_KEY,
+                "from": five_days_ago,
             },
             timeout=8,
         )
@@ -1641,6 +1691,7 @@ For each sector provide:
   - If those are thin, use regulatory or sectoral themes instead.
   - Mention at least 2 concrete themes from the supplied articles.
   - Do NOT write "No relevant geopolitical headlines" unless every bucket is empty.
+  - NEWS RECENCY RULE: Treat any news older than 5 days as historical context only. NEVER cite old news (like old COVID pill approvals from years ago) as the driver for TODAY'S price movement.
 
 🏭 FUNDAMENTAL ANALYSIS: Company-level impact, margins, supply chains
   - If SUBSECTOR DIVERGENCE is flagged, you MUST explain which subsector benefits and which suffers, and WHY.
@@ -1672,7 +1723,7 @@ For each sector provide:
 - Mandatory Technical Indicators: include RSI, MA20 vs MA50, support/resistance, breakout/breakdown state, and volume ratio for every sector.
 - IMPORTANT: Only reference macro factors marked as CRITICAL. Do NOT use IRRELEVANT factors.
 - Move Type: Use the supplied classification. If it says TECHNICAL_ONLY or widely diverges from the news, explicitly state that the move was driven by near-term institutional positioning and capital flows. Do NOT invent a news catalyst if price moved against the news.
-- News Drivers: Use the supplied sector/global/regulatory news buckets and mention 1-2 concrete themes. 
+- News Drivers: Use the supplied sector/global/regulatory news buckets and mention 1-2 concrete themes. Treat any news older than 5 days as historical context only, never as today's catalyst.
 - If SUBSECTOR DIVERGENCE flagged: Explain which subsector benefits vs suffers. If no divergence, explicitly state the move suggests sector-wide positioning rather than company-specific catalysts.
 - \U0001f504 RELATIVE STRENGTH: Compare this sector's daily % change against the other analyzed sectors to identify capital rotation.
 - Top Picks: Use the provided picks with their specific reasons. Explain WHY each stock benefits/suffers today.

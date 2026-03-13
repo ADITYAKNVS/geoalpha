@@ -28,14 +28,19 @@ def classify_rsi_zone(rsi) -> str:
 
 
 def build_sector_technical_snapshot(technical: dict) -> dict:
-    index_analysis = technical.get("index_analysis") or {}
-    ma = index_analysis.get("ma", {})
-    volume = index_analysis.get("volume", {})
-    breakout = index_analysis.get("breakout", {})
-    gap = index_analysis.get("gap", {})
-    daily = index_analysis.get("daily_change", {})
+    # analyze_sector() nests the index-level data inside "index_analysis".
+    # If it's None (index ticker failed), fall back to empty dict for safe defaults.
+    idx = technical.get("index_analysis") or {}
+    if idx.get("status") == "error":
+        idx = {}
 
-    rsi = index_analysis.get("rsi")
+    ma = idx.get("ma", {})
+    volume = idx.get("volume", {})
+    breakout = idx.get("breakout", {})
+    gap = idx.get("gap", {})
+    daily = idx.get("daily_change", {})
+
+    rsi = idx.get("rsi")
     ma20 = ma.get("ma20")
     ma50 = ma.get("ma50")
     ma_signal = ma.get("signal", "NEUTRAL")
@@ -49,8 +54,8 @@ def build_sector_technical_snapshot(technical: dict) -> dict:
     gap_pct = gap.get("gap_pct", 0.0)
     gap_direction = gap.get("direction", "flat")
     daily_change = daily.get("change_pct", technical.get("sector_daily_change", 0.0))
-    weekly_change = index_analysis.get("weekly_change", 0.0)
-    monthly_change = index_analysis.get("monthly_change", 0.0)
+    weekly_change = idx.get("weekly_change", 0.0)
+    monthly_change = idx.get("monthly_change", 0.0)
 
     volume_source_suffix = ""
     if volume.get("source") == "stock_aggregate":
