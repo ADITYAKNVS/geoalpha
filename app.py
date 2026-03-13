@@ -2486,6 +2486,18 @@ if generate:
             for sector in selected:
                 technical_results[sector] = tg.analyze_sector(sector)
 
+        # ── DEBUG: Show technical analysis diagnostic (visible in UI) ──
+        with st.expander("🔍 Technical Analysis Debug (click to inspect)", expanded=False):
+            st.caption(f"Server time: {datetime.now().isoformat()} | is_market_open: {is_market_open()}")
+            for sector, tech in technical_results.items():
+                idx = tech.get("index_analysis") or {}
+                st.markdown(
+                    f"**{sector}**: status=`{idx.get('status', 'MISSING')}` | "
+                    f"RSI=`{idx.get('rsi', 'N/A')}` | "
+                    f"MA=`{idx.get('ma', {}).get('signal', 'N/A')}` | "
+                    f"Vol valid=`{idx.get('volume', {}).get('data_valid', 'N/A')}`"
+                )
+
         # Step 4: Run hybrid signal combiner
         with st.spinner("⚡ Combining signals — Hybrid ML engine..."):
             combiner = load_signal_combiner()
