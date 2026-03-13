@@ -57,6 +57,7 @@ from technical_guardrails import (
     check_token_expiry,
     generate_fyers_auth_url,
     exchange_fyers_auth_code,
+    is_market_open,
 )
 from signal_combiner import HybridSignalCombiner
 
@@ -879,7 +880,6 @@ def build_sector_driver_dossier(sector, technical, sentiment, daily_change_pct):
 def get_nifty_50_change():
     try:
         from datetime import datetime, timedelta
-        from technical_guardrails import is_market_open
         now = datetime.now()
         if is_market_open():
             range_to = now.strftime("%Y-%m-%d")
