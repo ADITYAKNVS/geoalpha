@@ -48,6 +48,7 @@ from technical_guardrails import (
     TechnicalGuardrails,
     SECTOR_TICKERS,
     STOCK_PICK_REASONS,
+    SECTOR_KEY_DRIVERS,
     fetch_historical_data,
     map_yf_to_fyers,
     get_live_quotes,
@@ -1588,6 +1589,13 @@ def analyze_with_llm(prices, nifty_data, selected_sectors, hybrid_results,
             if critical:
                 signal_context += f"  CRITICAL macro factors (MUST use): {', '.join(critical)}\n"
 
+        # Sector-specific key driver checklist
+        key_drivers = SECTOR_KEY_DRIVERS.get(sector, {})
+        if key_drivers:
+            signal_context += "  SECTOR-SPECIFIC KEY DRIVERS (use these to guide your NEWS DRIVERS section):\n"
+            for category, items in key_drivers.items():
+                signal_context += f"    {category}: {', '.join(items)}\n"
+
         # Stock picks with reasons + momentum data
         top_picks = tech_details.get("top_picks", [])
         avoid_picks = tech_details.get("avoid_picks", [])
@@ -1701,10 +1709,12 @@ For each sector provide:
   - Use the exact technical lines supplied above. If a value is unavailable, say unavailable instead of skipping the section.
 
 🌍 GLOBAL / REGULATORY / SECTOR NEWS DRIVERS:
-  - Use the provided news buckets.
+  - IMPORTANT: Each sector has a SECTOR-SPECIFIC KEY DRIVERS checklist supplied in the data above. Organize your news drivers around those categories.
+  - For each sector, check the articles against its specific driver categories (e.g., for Banking: Central Bank/Monetary Policy, Bond Market, Credit Conditions; for Metals: Commodity Prices, China Demand, Trade Policies, etc.).
+  - Use the provided news buckets AND the sector-specific driver categories together to structure your analysis.
   - Prefer geopolitical/global macro themes if present.
   - If those are thin, use regulatory or sectoral themes instead.
-  - Mention at least 2 concrete themes from the supplied articles.
+  - Mention at least 2 concrete themes from the supplied articles, mapped to the sector's key driver categories.
   - Do NOT write "No relevant geopolitical headlines" unless every bucket is empty.
   - NEWS RECENCY RULE: Treat any news older than 5 days as historical context only. NEVER cite old news (like old COVID pill approvals from years ago) as the driver for TODAY'S price movement.
 

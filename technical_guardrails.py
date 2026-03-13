@@ -463,6 +463,176 @@ SECTOR_MACRO_WEIGHTS = {
     "Infrastructure": {"nasdaq": 0.0, "usd_inr": 0.2, "crude": 0.2, "opec": 0.0, "china": 0.1, "rbi": 0.6},
 }
 
+# ── Sector-specific key drivers (checklist for NEWS DRIVERS section) ──
+# Each sector maps to driver categories → specific indicators, policies, or
+# global triggers that actually move that sector.  Fed into the LLM prompt
+# so it knows *exactly* what to discuss per sector.
+SECTOR_KEY_DRIVERS = {
+    "Banking": {
+        "Central Bank / Monetary Policy": [
+            "RBI repo rate decisions",
+            "CRR / SLR changes",
+            "Liquidity injections / withdrawals",
+            "Banking regulations (capital adequacy, NPA rules)",
+        ],
+        "Bond Market": [
+            "Indian 10-year G-sec yield",
+            "US Treasury yields",
+            "Yield curve changes",
+        ],
+        "Credit Conditions": [
+            "Bank credit growth",
+            "Deposit growth",
+            "NPA trends",
+        ],
+        "Global Macro": [
+            "Global interest rate cycles",
+            "US Fed policy",
+            "Currency volatility affecting capital flows",
+        ],
+        "Financial Stability": [
+            "Banking crisis risk",
+            "NBFC stress",
+            "Liquidity crunch events",
+        ],
+    },
+    "IT": {
+        "Global Tech Spending": [
+            "Enterprise IT budgets",
+            "Cloud spending trends",
+        ],
+        "Currency": [
+            "USD/INR movement",
+        ],
+        "US Economy": [
+            "US GDP growth",
+            "US recession fears",
+            "Tech layoffs",
+        ],
+        "Global Tech Regulation": [
+            "AI regulation",
+            "Data privacy rules",
+            "Immigration / visa policies",
+        ],
+        "Major Tech Earnings": [
+            "Earnings of Microsoft, Amazon, Google, etc.",
+        ],
+    },
+    "Oil & Gas": {
+        "Crude Oil Prices": [
+            "Brent Crude",
+            "WTI Crude Oil",
+        ],
+        "OPEC Decisions": [
+            "Production cuts",
+            "Supply targets",
+        ],
+        "Geopolitical Events": [
+            "Middle East conflicts",
+            "Russia sanctions",
+        ],
+        "Domestic Policies": [
+            "Fuel price controls",
+            "Windfall taxes",
+            "Gas pricing policy",
+        ],
+    },
+    "Metals": {
+        "Commodity Prices": [
+            "Copper",
+            "Aluminium",
+            "Iron Ore",
+            "Steel (HRC prices)",
+        ],
+        "China Demand": [
+            "Chinese infrastructure spending",
+            "Property market trends",
+            "Industrial production",
+        ],
+        "Trade Policies": [
+            "Import / export duties",
+            "Anti-dumping rules",
+        ],
+        "Energy Costs": [
+            "Coal prices",
+            "Power costs",
+        ],
+    },
+    "FMCG": {
+        "Rural Demand": [
+            "Monsoon outlook",
+            "Rural wage growth",
+            "Farm income",
+        ],
+        "Inflation": [
+            "Food inflation",
+            "Commodity input costs",
+        ],
+        "Government Policies": [
+            "Subsidies",
+            "Rural spending programs",
+        ],
+        "Consumer Sentiment": [
+            "Retail sales data",
+            "Consumption trends",
+        ],
+    },
+    "Pharma": {
+        "Regulatory Approvals": [
+            "USFDA approvals",
+            "Drug pipeline approvals",
+        ],
+        "Drug Pricing": [
+            "US drug price regulation",
+            "Generic drug pricing pressure",
+        ],
+        "Healthcare Spending": [
+            "Global pharma demand",
+            "Patent expiries",
+        ],
+        "Regulatory Actions": [
+            "Warning letters",
+            "Import alerts",
+        ],
+    },
+    "Infrastructure": {
+        "Government Budget": [
+            "Infrastructure spending",
+            "Public project announcements",
+        ],
+        "Interest Rates": [
+            "Borrowing cost for projects",
+        ],
+        "Raw Material Prices": [
+            "Cement",
+            "Steel",
+        ],
+        "Project Pipeline": [
+            "Road / rail / airport projects",
+        ],
+    },
+    "Gold": {
+        "Safe Haven Demand": [
+            "Global risk-off sentiment",
+            "Geopolitical tensions",
+        ],
+        "Currency & Rates": [
+            "USD/INR movement",
+            "US real yields",
+            "Fed rate expectations",
+        ],
+        "Physical Demand": [
+            "Indian jewellery demand",
+            "Festival / wedding season",
+            "ETF flows",
+        ],
+        "Inflation Hedge": [
+            "Global inflation trends",
+            "Central bank gold buying",
+        ],
+    },
+}
+
 
 class TechnicalGuardrails:
     """Hard-coded technical analysis engine."""
