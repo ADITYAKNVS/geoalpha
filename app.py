@@ -878,8 +878,13 @@ def build_sector_driver_dossier(sector, technical, sentiment, daily_change_pct):
 def get_nifty_50_change():
     try:
         from datetime import datetime, timedelta
-        range_to = datetime.now().strftime("%Y-%m-%d")
-        range_from = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+        from technical_guardrails import is_market_open
+        now = datetime.now()
+        if is_market_open():
+            range_to = now.strftime("%Y-%m-%d")
+        else:
+            range_to = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        range_from = (now - timedelta(days=10)).strftime("%Y-%m-%d")
         data = {
             "symbol": "NSE:NIFTY 50-INDEX",
             "resolution": "1D",

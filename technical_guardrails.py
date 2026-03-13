@@ -15,7 +15,7 @@ except ImportError:
     pass
 
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fyers_apiv3 import fyersModel
 import numpy as np
 try:
@@ -245,6 +245,22 @@ def get_live_quotes(tickers: list) -> dict:
     return results
 
 
+def is_market_open() -> bool:
+    """Check if current IST time is within Indian equity market hours (9:15 AM – 3:30 PM, weekdays)."""
+    try:
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        now_ist = datetime.now(timezone.utc).astimezone(ist)
+    except ImportError:
+        # Fallback: assume the local timezone is IST
+        now_ist = datetime.now()
+    if now_ist.weekday() >= 5:  # Saturday / Sunday
+        return False
+    market_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now_ist <= market_close
+
+
 def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
     days = 60
     if period.endswith("d"):
@@ -253,8 +269,15 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
         except ValueError:
             pass
 
-    range_to = datetime.now().strftime("%Y-%m-%d")
-    range_from = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    # AFTER-HOURS FIX: When the market is closed, bumping range_to to
+    # tomorrow ensures the Fyers API includes today's completed daily
+    # candle instead of omitting it or returning a placeholder row.
+    now = datetime.now()
+    if is_market_open():
+        range_to = now.strftime("%Y-%m-%d")
+    else:
+        range_to = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    range_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     fyers_symbol = map_yf_to_fyers(ticker)
 
     data = {
@@ -282,11 +305,19 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
     # CLEANING & VALIDATION:
     # - Drop rows with NaN OHLC values
     # - Drop rows where prices are non-positive or all zeros
+    # - After hours: drop any future-date placeholder candles
     # This ensures we only keep valid completed daily candles and never treat
     # placeholder / bad data as a real bar.
     if not df.empty:
         df = df[~df[["Open", "High", "Low", "Close"]].isna().any(axis=1)]
         df = df[(df[["Open", "High", "Low", "Close"]] > 0).all(axis=1)]
+
+        # After hours: trim any candle whose date is strictly after today
+        # (could appear because we set range_to = tomorrow).
+        if not is_market_open():
+            today_end = pd.Timestamp(now.strftime("%Y-%m-%d")) + pd.Timedelta(days=1)
+            df = df[df.index < today_end]
+
         if df.empty:
             logger.warning("All candles filtered out as invalid for %s (%s)", ticker, fyers_symbol)
             return df
