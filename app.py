@@ -2487,7 +2487,7 @@ if generate:
                 technical_results[sector] = tg.analyze_sector(sector)
 
         # ── DEBUG: Show technical analysis diagnostic (visible in UI) ──
-        with st.expander("🔍 Technical Analysis Debug (click to inspect)", expanded=False):
+        with st.expander("🔍 Technical Analysis Debug (click to inspect)", expanded=True):
             st.caption(f"Server time: {datetime.now().isoformat()} | is_market_open: {is_market_open()}")
             for sector, tech in technical_results.items():
                 idx = tech.get("index_analysis") or {}
@@ -2495,8 +2495,20 @@ if generate:
                     f"**{sector}**: status=`{idx.get('status', 'MISSING')}` | "
                     f"RSI=`{idx.get('rsi', 'N/A')}` | "
                     f"MA=`{idx.get('ma', {}).get('signal', 'N/A')}` | "
-                    f"Vol valid=`{idx.get('volume', {}).get('data_valid', 'N/A')}`"
+                    f"Vol valid=`{idx.get('volume', {}).get('data_valid', 'N/A')}` | "
+                    f"reason=`{idx.get('reason', '')}`"
                 )
+            # Direct Fyers API test
+            st.markdown("---")
+            st.markdown("**Direct Fyers API Test:**")
+            try:
+                test_df = fetch_historical_data("^CNXMETAL", period="60d")
+                if test_df.empty:
+                    st.error("❌ fetch_historical_data returned EMPTY DataFrame — Fyers API is not returning data from this server")
+                else:
+                    st.success(f"✅ fetch_historical_data returned {len(test_df)} rows, last date: {test_df.index[-1]}, last close: {test_df['Close'].iloc[-1]}")
+            except Exception as e:
+                st.error(f"❌ fetch_historical_data EXCEPTION: {e}")
 
         # Step 4: Run hybrid signal combiner
         with st.spinner("⚡ Combining signals — Hybrid ML engine..."):
