@@ -278,54 +278,20 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
         df.set_index("Datetime", inplace=True)
     else:
         logger.warning("Fyers historical response not ok for %s (%s): %s", ticker, fyers_symbol, response)
-        
-    # STITCHING LOGIC: Fyers History usually lags by a day (only returns fully completed candles).
-    # To make TA real-time, we get today's live quote and append it if it's missing.
+
+    # CLEANING & VALIDATION:
+    # - Drop rows with NaN OHLC values
+    # - Drop rows where prices are non-positive or all zeros
+    # This ensures we only keep valid completed daily candles and never treat
+    # placeholder / bad data as a real bar.
     if not df.empty:
-        try:
-            live_q = get_live_quotes([ticker]).get(ticker, {})
-            lp = live_q.get("lp", 0)
-            if lp > 0:
-                # Check if we already have today's candle (e.g. after midnight exchange update)
-                today_date = pd.to_datetime(datetime.now().date())
-                last_dt = df.index[-1].normalize()
-                
-                if last_dt < today_date:
-                    # Fetch today's actual OHLCV from Fyers intraday history
-                    today_str = datetime.now().strftime("%Y-%m-%d")
-                    intraday_data = {
-                        "symbol": map_yf_to_fyers(ticker),
-                        "resolution": "1D",
-                        "date_format": "1",
-                        "range_from": today_str,
-                        "range_to": today_str,
-                        "cont_flag": "1",
-                    }
-                    try:
-                        intraday_resp = get_fyers_client().history(data=intraday_data)
-                        if (intraday_resp and intraday_resp.get("s") == "ok"
-                                and intraday_resp.get("candles")
-                                and len(intraday_resp["candles"]) > 0):
-                            c = intraday_resp["candles"][-1]
-                            new_row = pd.DataFrame({
-                                "Open": [c[1]], "High": [c[2]], "Low": [c[3]],
-                                "Close": [c[4]], "Volume": [c[5]]
-                            }, index=[today_date])
-                        else:
-                            # Fyers intraday didn't return today — use live price + 0 volume
-                            new_row = pd.DataFrame({
-                                "Open": [lp], "High": [lp], "Low": [lp],
-                                "Close": [lp], "Volume": [0]
-                            }, index=[today_date])
-                    except Exception:
-                        new_row = pd.DataFrame({
-                            "Open": [lp], "High": [lp], "Low": [lp],
-                            "Close": [lp], "Volume": [0]
-                        }, index=[today_date])
-                    df = pd.concat([df, new_row])
-        except Exception as exc:
-            logger.warning("Failed to stitch live quote for %s: %s", ticker, exc)
-            
+        df = df[~df[["Open", "High", "Low", "Close"]].isna().any(axis=1)]
+        df = df[(df[["Open", "High", "Low", "Close"]] > 0).all(axis=1)]
+        if df.empty:
+            logger.warning("All candles filtered out as invalid for %s (%s)", ticker, fyers_symbol)
+            return df
+        df.sort_index(inplace=True)
+
     return df
 
 
@@ -1094,9 +1060,21 @@ class TechnicalGuardrails:
             "direction": "NEUTRAL",
             "confidence": 0.3,
             "score": 0.0,
-            "rsi": 50.0,
-            "ma": {"signal": "NEUTRAL", "strength": 0.0, "ma20": 0, "ma50": 0, "spread_pct": 0, "crossover": "N/A"},
-            "volume": {"is_anomaly": False, "ratio": 1.0, "signal": "NORMAL"},
+            "rsi": None,
+            "ma": {
+                "signal": "NEUTRAL",
+                "strength": 0.0,
+                "ma20": None,
+                "ma50": None,
+                "spread_pct": 0.0,
+                "crossover": "N/A",
+            },
+            "volume": {
+                "is_anomaly": False,
+                "ratio": None,
+                "signal": "NO_DATA",
+                "data_valid": False,
+            },
             "daily_change": {"change_pct": 0.0, "volatility_class": "normal", "direction": "flat"},
             "gap": {"gap_pct": 0.0, "abs_gap_pct": 0.0, "direction": "flat"},
             "breakout": {"state": "INSIDE_RANGE", "distance_pct": 0.0},
