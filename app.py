@@ -2016,36 +2016,46 @@ def create_sector_ticker_tape(sector_changes):
         color = "#00e676" if chp > 0 else "#ff1744" if chp < 0 else "#8888a0"
         arrow = "▲" if chp > 0 else "▼" if chp < 0 else "▬"
         items.append(
-            f'<span style="margin:0 28px;white-space:nowrap;">'
-            f'{icon} <strong style="color:#e8e8f0;">{name}</strong> '
-            f'<span style="color:{color};font-weight:700;">{arrow} {chp:+.2f}%</span>'
-            f'</span>'
+            f'<div style="display:inline-flex; align-items:center; padding: 6px 14px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); margin: 0 10px;">'
+            f'<span style="margin-right:6px;">{icon}</span>'
+            f'<strong style="color:#e8e8f0;font-size:14px;white-space:nowrap;margin-right:6px;">{name}</strong>'
+            f'<span style="color:{color};font-weight:700;font-size:14px;white-space:nowrap;">{arrow} {chp:+.2f}%</span>'
+            f'</div>'
         )
     tape_content = "".join(items)
-    # Duplicate content for seamless loop
+    
+    # We use st.markdown instead of components.html so the Streamlit DOM tree
+    # gracefully diffs the string changes instead of nuking the entire iframe.
+    # To ensure the animation doesn't snap abruptly, the CSS duration is long.
     return f"""
     <style>
-    @keyframes ticker-scroll {{
+    @keyframes scrollAnimation {{
         0%   {{ transform: translateX(0); }}
-        100% {{ transform: translateX(-50%); }}
+        100% {{ transform: translateX(calc(-50% - 10px)); }}
     }}
-    .ticker-wrap {{
+    .live-ticker-container {{
         overflow: hidden;
+        white-space: nowrap;
         background: linear-gradient(90deg, rgba(20,20,35,0.95), rgba(15,15,26,0.95));
         border: 1px solid rgba(255,255,255,0.06);
         border-radius: 12px;
         padding: 12px 0;
         margin: 8px 0 16px;
-    }}
-    .ticker-move {{
+        position: relative;
+        width: 100%;
         display: flex;
-        animation: ticker-scroll 25s linear infinite;
-        width: max-content;
     }}
-    .ticker-move:hover {{ animation-play-state: paused; }}
+    .live-ticker-track {{
+        display: inline-flex;
+        animation: scrollAnimation 30s linear infinite;
+        will-change: transform;
+    }}
+    .live-ticker-track:hover {{
+        animation-play-state: paused;
+    }}
     </style>
-    <div class="ticker-wrap">
-        <div class="ticker-move">
+    <div class="live-ticker-container">
+        <div class="live-ticker-track">
             {tape_content}{tape_content}
         </div>
     </div>
@@ -2263,10 +2273,9 @@ def dashboard_snapshot():
     st.markdown("</div>", unsafe_allow_html=True)
     st.divider()
 
-    # ── Sector Ticker Tape (scrolling live strip) ──
-    import streamlit.components.v1 as components
+    # ── Sector Live Performance Strip ──
     tape_html = create_sector_ticker_tape(live_sector_changes)
-    components.html(tape_html, height=52, scrolling=False)
+    st.markdown(tape_html, unsafe_allow_html=True)
 
     # ── Sector vs Nifty50 Relative Strength ──
     st.markdown(f"### ⚡ Sector Relative Strength vs Nifty50 ({sector_data_source})")
