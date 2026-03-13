@@ -1471,8 +1471,44 @@ def analyze_with_llm(prices, nifty_data, selected_sectors, hybrid_results,
         if hs.rally_alert:
             signal_context += "  \U0001f680 RALLY ALERT ACTIVE\n"
 
-        # Subsector divergence data
+        # ── INDEX-LEVEL TECHNICAL DETAILS (RSI, MA, Volume, Breakout) ──
         tech_details = hs.technical_details
+        idx = tech_details.get("index_analysis") or {}
+        if idx and idx.get("status") == "ok":
+            idx_rsi = idx.get("rsi", "N/A")
+            idx_ma = idx.get("ma", {})
+            idx_vol = idx.get("volume", {})
+            idx_daily = idx.get("daily_change", {})
+            idx_breakout = idx.get("breakout", {})
+            idx_weekly = idx.get("weekly_change", 0.0)
+            idx_monthly = idx.get("monthly_change", 0.0)
+            signal_context += f"  INDEX TECHNICALS:\n"
+            signal_context += f"    RSI: {idx_rsi:.1f}\n" if isinstance(idx_rsi, (int, float)) else ""
+            signal_context += f"    MA20: {idx_ma.get('ma20', 'N/A')}, MA50: {idx_ma.get('ma50', 'N/A')}, Crossover: {idx_ma.get('crossover', 'N/A')}, MA Signal: {idx_ma.get('signal', 'N/A')}\n"
+            signal_context += f"    Volume Ratio: {idx_vol.get('ratio', 'N/A')}x ({idx_vol.get('signal', 'N/A')})\n"
+            signal_context += f"    Daily Change: {idx_daily.get('change_pct', 0):+.2f}% ({idx_daily.get('volatility_class', 'normal')})\n"
+            signal_context += f"    Weekly Change: {idx_weekly:+.2f}%, Monthly Change: {idx_monthly:+.2f}%\n"
+            signal_context += f"    Breakout State: {idx_breakout.get('state', 'N/A')} (distance: {idx_breakout.get('distance_pct', 0):+.2f}%)\n"
+
+        # ── ALL STOCK ANALYSES (so LLM can discuss individual stocks) ──
+        stock_analyses = tech_details.get("stock_analyses", [])
+        if stock_analyses:
+            signal_context += "  STOCK-LEVEL ANALYSIS:\n"
+            for sa in stock_analyses:
+                sa_name = sa.get("stock_name", sa.get("ticker", "Unknown"))
+                sa_daily = sa.get("daily_change", {}).get("change_pct", 0)
+                sa_rsi = sa.get("rsi", "N/A")
+                sa_vol = sa.get("volume", {})
+                sa_score = sa.get("score", 0)
+                sa_dir = sa.get("direction", "NEUTRAL")
+                sa_breakout = sa.get("breakout", {})
+                signal_context += (
+                    f"    {sa_name}: {sa_dir} (score: {sa_score:.3f}, daily: {sa_daily:+.2f}%, "
+                    f"RSI: {sa_rsi:.0f}, volume: {sa_vol.get('ratio', 'N/A')}x {sa_vol.get('signal', '')}, "
+                    f"breakout: {sa_breakout.get('state', 'N/A')})\n"
+                )
+
+        # Subsector divergence data
         if tech_details.get("has_divergence"):
             signal_context += "  \u26a0\ufe0f SUBSECTOR DIVERGENCE DETECTED:\n"
             for sub_name, sub_data in tech_details.get("subsectors", {}).items():

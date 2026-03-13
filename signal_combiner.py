@@ -447,7 +447,7 @@ class HybridSignalCombiner:
             f"⚙️ Technical: {tech_label} (score {tech_score:.2f}, "
             f"confidence {tech_conf:.0%}) — WEIGHT: 25%"
         )
-        for r in tech_reasons[:2]:
+        for r in tech_reasons[:5]:
             reasoning.append(f"   → {r}")
 
         # Volume
