@@ -2197,7 +2197,10 @@ def get_smart_quotes(tickers):
     return get_yf_quotes(tickers), source
 
 
-@st.fragment(run_every="10s")
+# ── Auto-refresh config based on market hours ──
+refresh_time = "10s" if market_open else None
+
+@st.fragment(run_every=refresh_time)
 def dashboard_snapshot():
     now_refresh = datetime.now(timezone.utc).astimezone(pytz.timezone('Asia/Kolkata')).strftime("%Y-%m-%d %H:%M:%S")
     col_r1, col_r2 = st.columns([6, 1])
