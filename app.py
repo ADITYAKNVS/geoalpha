@@ -2005,7 +2005,7 @@ def create_sentiment_gauge(sentiment_data):
     return fig
 
 def create_sector_ticker_tape(sector_changes):
-    """Build a static flexbox HTML strip with live sector % changes."""
+    """Build a scrolling ticker-tape HTML strip with live sector % changes."""
     sector_icons = {
         "IT": "💻", "Banking": "🏦", "FMCG": "🛒", "Oil & Gas": "⛽",
         "Pharma": "💊", "Metals": "⚙️", "Infrastructure": "🏗️", "Gold": "🥇"
@@ -2016,26 +2016,38 @@ def create_sector_ticker_tape(sector_changes):
         color = "#00e676" if chp > 0 else "#ff1744" if chp < 0 else "#8888a0"
         arrow = "▲" if chp > 0 else "▼" if chp < 0 else "▬"
         items.append(
-            f'<div style="padding: 6px 14px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">'
-            f'<span style="margin-right:6px;">{icon}</span>'
-            f'<strong style="color:#e8e8f0;font-size:14px;white-space:nowrap;margin-right:6px;">{name}</strong>'
-            f'<span style="color:{color};font-weight:700;font-size:14px;white-space:nowrap;">{arrow} {chp:+.2f}%</span>'
-            f'</div>'
+            f'<span style="margin:0 28px;white-space:nowrap;">'
+            f'{icon} <strong style="color:#e8e8f0;">{name}</strong> '
+            f'<span style="color:{color};font-weight:700;">{arrow} {chp:+.2f}%</span>'
+            f'</span>'
         )
     tape_content = "".join(items)
+    # Duplicate content for seamless loop
     return f"""
-    <div style="
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
+    <style>
+    @keyframes ticker-scroll {{
+        0%   {{ transform: translateX(0); }}
+        100% {{ transform: translateX(-50%); }}
+    }}
+    .ticker-wrap {{
+        overflow: hidden;
         background: linear-gradient(90deg, rgba(20,20,35,0.95), rgba(15,15,26,0.95));
         border: 1px solid rgba(255,255,255,0.06);
         border-radius: 12px;
-        padding: 16px;
+        padding: 12px 0;
         margin: 8px 0 16px;
-        justify-content: center;
-    ">
-        {tape_content}
+    }}
+    .ticker-move {{
+        display: flex;
+        animation: ticker-scroll 25s linear infinite;
+        width: max-content;
+    }}
+    .ticker-move:hover {{ animation-play-state: paused; }}
+    </style>
+    <div class="ticker-wrap">
+        <div class="ticker-move">
+            {tape_content}{tape_content}
+        </div>
     </div>
     """
 
@@ -2251,9 +2263,10 @@ def dashboard_snapshot():
     st.markdown("</div>", unsafe_allow_html=True)
     st.divider()
 
-    # ── Sector Live Performance Strip ──
+    # ── Sector Ticker Tape (scrolling live strip) ──
+    import streamlit.components.v1 as components
     tape_html = create_sector_ticker_tape(live_sector_changes)
-    st.markdown(tape_html, unsafe_allow_html=True)
+    components.html(tape_html, height=52, scrolling=False)
 
     # ── Sector vs Nifty50 Relative Strength ──
     st.markdown(f"### ⚡ Sector Relative Strength vs Nifty50 ({sector_data_source})")
