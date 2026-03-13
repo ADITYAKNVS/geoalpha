@@ -2006,6 +2006,8 @@ def create_sentiment_gauge(sentiment_data):
 
 def create_sector_ticker_tape(sector_changes):
     """Build a scrolling ticker-tape HTML strip with live sector % changes."""
+    import time
+    
     sector_icons = {
         "IT": "💻", "Banking": "🏦", "FMCG": "🛒", "Oil & Gas": "⛽",
         "Pharma": "💊", "Metals": "⚙️", "Infrastructure": "🏗️", "Gold": "🥇"
@@ -2024,16 +2026,19 @@ def create_sector_ticker_tape(sector_changes):
         )
     tape_content = "".join(items)
     
-    # We use st.markdown instead of components.html so the Streamlit DOM tree
-    # gracefully diffs the string changes instead of nuking the entire iframe.
-    # To ensure the animation doesn't snap abruptly, the CSS duration is long.
+    # Generate a unique ID for this specific render tick
+    # This completely overrides Streamlit's virtual DOM diffing logic and forces it 
+    # to render a brand new HTML node, effectively restarting the scroll animation 
+    # but keeping it in sync.
+    tick_id = int(time.time() * 1000)
+    
     return f"""
     <style>
-    @keyframes scrollAnimation {{
+    @keyframes scrollAnimation_{tick_id} {{
         0%   {{ transform: translateX(0); }}
         100% {{ transform: translateX(calc(-50% - 10px)); }}
     }}
-    .live-ticker-container {{
+    .live-ticker-container_{tick_id} {{
         overflow: hidden;
         white-space: nowrap;
         background: linear-gradient(90deg, rgba(20,20,35,0.95), rgba(15,15,26,0.95));
@@ -2045,17 +2050,17 @@ def create_sector_ticker_tape(sector_changes):
         width: 100%;
         display: flex;
     }}
-    .live-ticker-track {{
+    .live-ticker-track_{tick_id} {{
         display: inline-flex;
-        animation: scrollAnimation 30s linear infinite;
+        animation: scrollAnimation_{tick_id} 30s linear infinite;
         will-change: transform;
     }}
-    .live-ticker-track:hover {{
+    .live-ticker-track_{tick_id}:hover {{
         animation-play-state: paused;
     }}
     </style>
-    <div class="live-ticker-container">
-        <div class="live-ticker-track">
+    <div class="live-ticker-container_{tick_id}">
+        <div class="live-ticker-track_{tick_id}">
             {tape_content}{tape_content}
         </div>
     </div>
