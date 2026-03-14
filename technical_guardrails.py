@@ -343,6 +343,8 @@ def fetch_historical_data(ticker: str, period: str = "60d") -> pd.DataFrame:
 
         # Trim any future-date candles (safety net)
         today_end = pd.Timestamp(today_str) + pd.Timedelta(days=1)
+        if getattr(df.index, "tz", None) is not None:
+            today_end = today_end.tz_localize(df.index.tz)
         df = df[df.index < today_end]
 
         if df.empty:
